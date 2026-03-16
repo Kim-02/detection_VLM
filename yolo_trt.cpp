@@ -384,16 +384,16 @@ bool YoloTrtDetector::inferImage(const std::string& image_path, std::vector<Dete
     return true;
 }
 
-std::string YoloTrtDetector::detectionsToText(const std::vector<Detection>& dets) const {
+std::string YoloTrtDetector::detectionsOnlyText(const std::vector<Detection>& dets) const {
     std::ostringstream oss;
-    oss << "Detections: " << dets.size() << "\n";
     for (size_t i = 0; i < dets.size(); ++i) {
         const auto& d = dets[i];
         oss << "[" << i << "] "
             << "class=" << d.class_id
             << " conf=" << d.conf
             << " box=(" << d.x1 << ", " << d.y1
-            << ", " << d.x2 << ", " << d.y2 << ")\n";
+            << ", " << d.x2 << ", " << d.y2 << ")";
+        if (i + 1 < dets.size()) oss << "\n";
     }
     return oss.str();
 }

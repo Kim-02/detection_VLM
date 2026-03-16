@@ -22,7 +22,7 @@ public:
     bool loadEngine(const std::string& engine_path);
     bool inferImage(const std::string& image_path, std::vector<Detection>& out_dets);
 
-    std::string detectionsToText(const std::vector<Detection>& dets) const;
+    std::string detectionsOnlyText(const std::vector<Detection>& dets) const;
 
     int getInputW() const { return input_w_; }
     int getInputH() const { return input_h_; }
@@ -81,5 +81,7 @@ private:
     std::string input_name_;
     std::string output_name_;
 };
+
+
 
 #endif
