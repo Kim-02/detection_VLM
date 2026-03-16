@@ -10,7 +10,7 @@ LDFLAGS := -L$(CUDA_HOME)/lib64 -L$(TRT_LIB)
 LIBS := -lnvinfer -lcudart
 
 TARGET := app
-SRCS := main.cpp yolo_trt.cpp
+SRCS := main.cpp yolo_trt.cpp risk_analyzer.cpp
 
 all: $(TARGET)
 
