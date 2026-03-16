@@ -21,14 +21,43 @@ float RiskAnalyzer::boxArea(const Detection& b) const {
     return std::max(0.0f, b.x2 - b.x1) * std::max(0.0f, b.y2 - b.y1);
 }
 
-bool RiskAnalyzer::isInsidePerson(const Detection& person, const Detection& item) const {
-    float inter = intersectionArea(person, item);
+Detection RiskAnalyzer::makeHelmetRegion(const Detection& person) const {
+    float w = person.x2 - person.x1;
+    float h = person.y2 - person.y1;
+
+    Detection region;
+    region.x1 = person.x1 + 0.20f * w;
+    region.x2 = person.x2 - 0.20f * w;
+    region.y1 = person.y1;
+    region.y2 = person.y1 + 0.30f * h;
+    region.conf = 1.0f;
+    region.class_id = -10;  // debug용
+    return region;
+}
+
+Detection RiskAnalyzer::makeVestRegion(const Detection& person) const {
+    float w = person.x2 - person.x1;
+    float h = person.y2 - person.y1;
+
+    Detection region;
+    region.x1 = person.x1 + 0.18f * w;
+    region.x2 = person.x2 - 0.18f * w;
+    region.y1 = person.y1 + 0.28f * h;
+    region.y2 = person.y1 + 0.78f * h;
+    region.conf = 1.0f;
+    region.class_id = -11;  // debug용
+    return region;
+}
+
+float RiskAnalyzer::calcOverlapRatio(const Detection& region, const Detection& item) const {
+    float inter = intersectionArea(region, item);
     float item_area = boxArea(item);
-    if (item_area <= 1e-6f) return false;
+    if (item_area <= 1e-6f) return 0.0f;
+    return inter / item_area;
+}
 
-    float ratio = inter / item_area;
-
-    // item 박스의 일정 비율 이상이 person 내부면 포함된 것으로 판단
+bool RiskAnalyzer::isItemInRegion(const Detection& region, const Detection& item) const {
+    float ratio = calcOverlapRatio(region, item);
     return ratio >= contain_ratio_thresh_;
 }
 
@@ -38,37 +67,40 @@ std::vector<PersonRiskResult> RiskAnalyzer::analyzePPE(const std::vector<Detecti
     std::vector<Detection> vests;
 
     for (const auto& d : dets) {
-        if (d.class_id == 2) {
-            persons.push_back(d);
-        } else if (d.class_id == 0) {
-            helmets.push_back(d);
-        } else if (d.class_id == 1) {
-            vests.push_back(d);
-        }
+        if (d.class_id == 2) persons.push_back(d);
+        else if (d.class_id == 0) helmets.push_back(d);
+        else if (d.class_id == 1) vests.push_back(d);
     }
 
     std::vector<PersonRiskResult> results;
 
     for (const auto& person : persons) {
+        Detection helmet_region = makeHelmetRegion(person);
+        Detection vest_region = makeVestRegion(person);
+
         bool has_helmet = false;
         bool has_vest = false;
 
+        PersonRiskResult r;
+        r.person_box = person;
+        r.debug.person_box = person;
+        r.debug.helmet_region = helmet_region;
+        r.debug.vest_region = vest_region;
+
         for (const auto& helmet : helmets) {
-            if (isInsidePerson(person, helmet)) {
-                has_helmet = true;
-                break;
-            }
+            float ratio = calcOverlapRatio(helmet_region, helmet);
+            bool accepted = (ratio >= contain_ratio_thresh_);
+            r.debug.helmet_candidates.push_back({helmet, ratio, accepted});
+            if (accepted) has_helmet = true;
         }
 
         for (const auto& vest : vests) {
-            if (isInsidePerson(person, vest)) {
-                has_vest = true;
-                break;
-            }
+            float ratio = calcOverlapRatio(vest_region, vest);
+            bool accepted = (ratio >= contain_ratio_thresh_);
+            r.debug.vest_candidates.push_back({vest, ratio, accepted});
+            if (accepted) has_vest = true;
         }
 
-        PersonRiskResult r;
-        r.person_box = person;
         r.has_helmet = has_helmet;
         r.has_vest = has_vest;
         r.is_risk = (!has_helmet || !has_vest);
@@ -111,6 +143,63 @@ std::string RiskAnalyzer::resultsToText(const std::vector<PersonRiskResult>& res
             << "vest=" << (r.has_vest ? "yes" : "no") << " "
             << "risk=" << (r.is_risk ? "yes" : "no") << " "
             << "msg=\"" << r.warning_message << "\"\n";
+    }
+
+    return oss.str();
+}
+
+std::string RiskAnalyzer::debugResultsToText(const std::vector<PersonRiskResult>& results) const {
+    std::ostringstream oss;
+
+    oss << "===== PPE DEBUG INFO =====\n";
+    oss << "contain_ratio_thresh = " << contain_ratio_thresh_ << "\n\n";
+
+    for (size_t i = 0; i < results.size(); ++i) {
+        const auto& r = results[i];
+
+        oss << "Person[" << i << "]\n";
+        oss << "  person_box = (" << r.debug.person_box.x1 << ", " << r.debug.person_box.y1
+            << ", " << r.debug.person_box.x2 << ", " << r.debug.person_box.y2 << ")\n";
+
+        oss << "  helmet_region = (" << r.debug.helmet_region.x1 << ", " << r.debug.helmet_region.y1
+            << ", " << r.debug.helmet_region.x2 << ", " << r.debug.helmet_region.y2 << ")\n";
+
+        oss << "  vest_region   = (" << r.debug.vest_region.x1 << ", " << r.debug.vest_region.y1
+            << ", " << r.debug.vest_region.x2 << ", " << r.debug.vest_region.y2 << ")\n";
+
+        oss << "  helmet_candidates:\n";
+        if (r.debug.helmet_candidates.empty()) {
+            oss << "    (none)\n";
+        } else {
+            for (size_t j = 0; j < r.debug.helmet_candidates.size(); ++j) {
+                const auto& c = r.debug.helmet_candidates[j];
+                oss << "    [" << j << "] "
+                    << "box=(" << c.item_box.x1 << ", " << c.item_box.y1
+                    << ", " << c.item_box.x2 << ", " << c.item_box.y2 << ") "
+                    << "overlap_ratio=" << c.overlap_ratio << " "
+                    << "accepted=" << (c.accepted ? "yes" : "no") << "\n";
+            }
+        }
+
+        oss << "  vest_candidates:\n";
+        if (r.debug.vest_candidates.empty()) {
+            oss << "    (none)\n";
+        } else {
+            for (size_t j = 0; j < r.debug.vest_candidates.size(); ++j) {
+                const auto& c = r.debug.vest_candidates[j];
+                oss << "    [" << j << "] "
+                    << "box=(" << c.item_box.x1 << ", " << c.item_box.y1
+                    << ", " << c.item_box.x2 << ", " << c.item_box.y2 << ") "
+                    << "overlap_ratio=" << c.overlap_ratio << " "
+                    << "accepted=" << (c.accepted ? "yes" : "no") << "\n";
+            }
+        }
+
+        oss << "  result: helmet=" << (r.has_helmet ? "yes" : "no")
+            << ", vest=" << (r.has_vest ? "yes" : "no")
+            << ", risk=" << (r.is_risk ? "yes" : "no") << "\n";
+
+        oss << "  message: " << r.warning_message << "\n\n";
     }
 
     return oss.str();

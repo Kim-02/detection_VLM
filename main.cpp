@@ -2,6 +2,7 @@
 #include "risk_analyzer.h"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -11,6 +12,7 @@ int main() {
     const std::string engine_path = "best.engine";
     const std::string image_path = "test.jpg";
     const std::string saved_risk_path = "risk_frame.jpg";
+    const std::string debug_text_path = "risk_debug.txt";
 
     YoloTrtDetector detector(640, 640, 0.25f, 0.45f);
 
@@ -27,10 +29,19 @@ int main() {
 
     std::cout << detector.detectionsToText(dets) << "\n";
 
-    RiskAnalyzer analyzer(0.5f);
+    RiskAnalyzer analyzer(0.4f);
     std::vector<PersonRiskResult> risk_results = analyzer.analyzePPE(dets);
 
     std::cout << analyzer.resultsToText(risk_results) << "\n";
+
+    std::string debug_text = analyzer.debugResultsToText(risk_results);
+    std::cout << debug_text;
+
+    {
+        std::ofstream ofs(debug_text_path);
+        ofs << debug_text;
+    }
+    std::cout << "디버그 텍스트 저장 완료: " << debug_text_path << "\n";
 
     if (analyzer.hasAnyRisk(risk_results)) {
         std::cout << "=== PPE 위험 감지 ===\n";
