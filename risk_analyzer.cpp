@@ -39,10 +39,10 @@ Detection RiskAnalyzer::makeHelmetRegion(const Detection& person) const {
     float h = person.y2 - person.y1;
 
     Detection region;
-    region.x1 = person.x1 + 0.28f * w;
-    region.x2 = person.x2 - 0.28f * w;
+    region.x1 = person.x1 + 0.32f * w;
+    region.x2 = person.x2 - 0.32f * w;
     region.y1 = person.y1;
-    region.y2 = person.y1 + 0.26f * h;
+    region.y2 = person.y1 + 0.24f * h;
     region.conf = 1.0f;
     region.class_id = -10;
     return region;
@@ -87,9 +87,9 @@ RegionMatchDebug RiskAnalyzer::evaluateHelmetCandidate(
     d.center_inside_region = pointInBox(centerX(helmet), centerY(helmet), region);
 
     // helmet는 더 엄격하게
-    bool overlap_ok = d.overlap_ratio >= contain_ratio_thresh_;
+    bool overlap_ok = d.overlap_ratio >= 0.35f;
     bool center_ok = d.center_inside_region;
-    bool align_ok = d.center_dx_ratio <= 0.22f;
+    bool align_ok = d.center_dx_ratio <= 0.18f;
 
     d.accepted = overlap_ok && center_ok && align_ok;
 
