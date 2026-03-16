@@ -243,13 +243,7 @@ async def infer(
         )[0]
 
         return JSONResponse(
-            content={
-                "model": MODEL_ID,
-                "filename": file.filename,
-                "image_size": [664, 664],
-                "parsed_detections": parsed_detections,
-                "result": result_text,
-            }
+            content={"result": result_text}
         )
 
     except torch.cuda.OutOfMemoryError:
