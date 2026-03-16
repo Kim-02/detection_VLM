@@ -5,3 +5,4 @@
 app
 draw.py
 .venv
+__pycache__
