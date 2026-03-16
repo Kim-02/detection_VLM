@@ -29,13 +29,11 @@ int main() {
 
     std::cout << detector.detectionsToText(dets) << "\n";
 
-    RiskAnalyzer analyzer(0.4f);
+    RiskAnalyzer analyzer(0.35f);
     std::vector<PersonRiskResult> risk_results = analyzer.analyzePPE(dets);
 
     std::cout << analyzer.resultsToText(risk_results) << "\n";
-
-    std::string debug_text = analyzer.debugResultsToText(risk_results);
-    std::cout << debug_text;
+    std::cout << analyzer.debugResultsToText(risk_results) << "\n";
 
     {
         std::ofstream ofs(debug_text_path);

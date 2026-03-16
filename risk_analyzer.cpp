@@ -21,31 +21,45 @@ float RiskAnalyzer::boxArea(const Detection& b) const {
     return std::max(0.0f, b.x2 - b.x1) * std::max(0.0f, b.y2 - b.y1);
 }
 
+float RiskAnalyzer::centerX(const Detection& b) const {
+    return 0.5f * (b.x1 + b.x2);
+}
+
+float RiskAnalyzer::centerY(const Detection& b) const {
+    return 0.5f * (b.y1 + b.y2);
+}
+
+bool RiskAnalyzer::pointInBox(float x, float y, const Detection& box) const {
+    return (x >= box.x1 && x <= box.x2 && y >= box.y1 && y <= box.y2);
+}
+
+// helmet는 머리 윗부분 중앙만 보도록 더 좁힘
 Detection RiskAnalyzer::makeHelmetRegion(const Detection& person) const {
     float w = person.x2 - person.x1;
     float h = person.y2 - person.y1;
 
     Detection region;
-    region.x1 = person.x1 + 0.20f * w;
-    region.x2 = person.x2 - 0.20f * w;
+    region.x1 = person.x1 + 0.28f * w;
+    region.x2 = person.x2 - 0.28f * w;
     region.y1 = person.y1;
-    region.y2 = person.y1 + 0.30f * h;
+    region.y2 = person.y1 + 0.26f * h;
     region.conf = 1.0f;
-    region.class_id = -10;  // debug용
+    region.class_id = -10;
     return region;
 }
 
+// vest는 몸통 중앙 영역으로 제한
 Detection RiskAnalyzer::makeVestRegion(const Detection& person) const {
     float w = person.x2 - person.x1;
     float h = person.y2 - person.y1;
 
     Detection region;
-    region.x1 = person.x1 + 0.18f * w;
-    region.x2 = person.x2 - 0.18f * w;
-    region.y1 = person.y1 + 0.28f * h;
-    region.y2 = person.y1 + 0.78f * h;
+    region.x1 = person.x1 + 0.22f * w;
+    region.x2 = person.x2 - 0.22f * w;
+    region.y1 = person.y1 + 0.30f * h;
+    region.y2 = person.y1 + 0.72f * h;
     region.conf = 1.0f;
-    region.class_id = -11;  // debug용
+    region.class_id = -11;
     return region;
 }
 
@@ -56,9 +70,52 @@ float RiskAnalyzer::calcOverlapRatio(const Detection& region, const Detection& i
     return inter / item_area;
 }
 
-bool RiskAnalyzer::isItemInRegion(const Detection& region, const Detection& item) const {
-    float ratio = calcOverlapRatio(region, item);
-    return ratio >= contain_ratio_thresh_;
+float RiskAnalyzer::calcCenterDxRatio(const Detection& person, const Detection& item) const {
+    float pw = std::max(1e-6f, person.x2 - person.x1);
+    return std::abs(centerX(person) - centerX(item)) / pw;
+}
+
+RegionMatchDebug RiskAnalyzer::evaluateHelmetCandidate(
+    const Detection& person,
+    const Detection& region,
+    const Detection& helmet
+) const {
+    RegionMatchDebug d{};
+    d.item_box = helmet;
+    d.overlap_ratio = calcOverlapRatio(region, helmet);
+    d.center_dx_ratio = calcCenterDxRatio(person, helmet);
+    d.center_inside_region = pointInBox(centerX(helmet), centerY(helmet), region);
+
+    // helmet는 더 엄격하게
+    bool overlap_ok = d.overlap_ratio >= contain_ratio_thresh_;
+    bool center_ok = d.center_inside_region;
+    bool align_ok = d.center_dx_ratio <= 0.22f;
+
+    d.accepted = overlap_ok && center_ok && align_ok;
+
+    // 점수: overlap 우선 + 중심 정렬 가중치
+    d.score = d.overlap_ratio * 0.7f + (1.0f - std::min(d.center_dx_ratio, 1.0f)) * 0.3f;
+    return d;
+}
+
+RegionMatchDebug RiskAnalyzer::evaluateVestCandidate(
+    const Detection& person,
+    const Detection& region,
+    const Detection& vest
+) const {
+    RegionMatchDebug d{};
+    d.item_box = vest;
+    d.overlap_ratio = calcOverlapRatio(region, vest);
+    d.center_dx_ratio = calcCenterDxRatio(person, vest);
+    d.center_inside_region = pointInBox(centerX(vest), centerY(vest), region);
+
+    bool overlap_ok = d.overlap_ratio >= contain_ratio_thresh_;
+    bool center_ok = d.center_inside_region;
+    bool align_ok = d.center_dx_ratio <= 0.28f;
+
+    d.accepted = overlap_ok && center_ok && align_ok;
+    d.score = d.overlap_ratio * 0.65f + (1.0f - std::min(d.center_dx_ratio, 1.0f)) * 0.35f;
+    return d;
 }
 
 std::vector<PersonRiskResult> RiskAnalyzer::analyzePPE(const std::vector<Detection>& dets) const {
@@ -78,42 +135,55 @@ std::vector<PersonRiskResult> RiskAnalyzer::analyzePPE(const std::vector<Detecti
         Detection helmet_region = makeHelmetRegion(person);
         Detection vest_region = makeVestRegion(person);
 
-        bool has_helmet = false;
-        bool has_vest = false;
-
         PersonRiskResult r;
         r.person_box = person;
         r.debug.person_box = person;
         r.debug.helmet_region = helmet_region;
         r.debug.vest_region = vest_region;
 
+        float best_helmet_score = -1.0f;
+        float best_vest_score = -1.0f;
+
         for (const auto& helmet : helmets) {
-            float ratio = calcOverlapRatio(helmet_region, helmet);
-            bool accepted = (ratio >= contain_ratio_thresh_);
-            r.debug.helmet_candidates.push_back({helmet, ratio, accepted});
-            if (accepted) has_helmet = true;
+            RegionMatchDebug dbg = evaluateHelmetCandidate(person, helmet_region, helmet);
+            r.debug.helmet_candidates.push_back(dbg);
+            if (dbg.accepted && dbg.score > best_helmet_score) {
+                best_helmet_score = dbg.score;
+            }
         }
 
         for (const auto& vest : vests) {
-            float ratio = calcOverlapRatio(vest_region, vest);
-            bool accepted = (ratio >= contain_ratio_thresh_);
-            r.debug.vest_candidates.push_back({vest, ratio, accepted});
-            if (accepted) has_vest = true;
+            RegionMatchDebug dbg = evaluateVestCandidate(person, vest_region, vest);
+            r.debug.vest_candidates.push_back(dbg);
+            if (dbg.accepted && dbg.score > best_vest_score) {
+                best_vest_score = dbg.score;
+            }
         }
 
-        r.has_helmet = has_helmet;
-        r.has_vest = has_vest;
-        r.is_risk = (!has_helmet || !has_vest);
+        r.has_helmet = (best_helmet_score >= 0.0f);
+        r.has_vest = (best_vest_score >= 0.0f);
+        r.is_risk = (!r.has_helmet || !r.has_vest);
 
-        if (!has_helmet && !has_vest) {
+        if (!r.has_helmet && !r.has_vest) {
             r.warning_message = "경고: 작업자가 안전모와 조끼를 모두 착용하지 않았습니다.";
-        } else if (!has_helmet) {
+        } else if (!r.has_helmet) {
             r.warning_message = "경고: 작업자가 안전모를 착용하지 않았습니다.";
-        } else if (!has_vest) {
+        } else if (!r.has_vest) {
             r.warning_message = "경고: 작업자가 조끼를 착용하지 않았습니다.";
         } else {
             r.warning_message = "정상: 보호구 착용 상태가 확인되었습니다.";
         }
+
+        // 보기 좋게 점수순 정렬
+        std::sort(r.debug.helmet_candidates.begin(), r.debug.helmet_candidates.end(),
+                  [](const RegionMatchDebug& a, const RegionMatchDebug& b) {
+                      return a.score > b.score;
+                  });
+
+        std::sort(r.debug.vest_candidates.begin(), r.debug.vest_candidates.end(),
+                  [](const RegionMatchDebug& a, const RegionMatchDebug& b) {
+                      return a.score > b.score;
+                  });
 
         results.push_back(r);
     }
@@ -130,7 +200,6 @@ bool RiskAnalyzer::hasAnyRisk(const std::vector<PersonRiskResult>& results) cons
 
 std::string RiskAnalyzer::resultsToText(const std::vector<PersonRiskResult>& results) const {
     std::ostringstream oss;
-
     oss << "PPE Risk Analysis: " << results.size() << " persons checked\n";
 
     for (size_t i = 0; i < results.size(); ++i) {
@@ -177,6 +246,9 @@ std::string RiskAnalyzer::debugResultsToText(const std::vector<PersonRiskResult>
                     << "box=(" << c.item_box.x1 << ", " << c.item_box.y1
                     << ", " << c.item_box.x2 << ", " << c.item_box.y2 << ") "
                     << "overlap_ratio=" << c.overlap_ratio << " "
+                    << "center_dx_ratio=" << c.center_dx_ratio << " "
+                    << "center_inside=" << (c.center_inside_region ? "yes" : "no") << " "
+                    << "score=" << c.score << " "
                     << "accepted=" << (c.accepted ? "yes" : "no") << "\n";
             }
         }
@@ -191,6 +263,9 @@ std::string RiskAnalyzer::debugResultsToText(const std::vector<PersonRiskResult>
                     << "box=(" << c.item_box.x1 << ", " << c.item_box.y1
                     << ", " << c.item_box.x2 << ", " << c.item_box.y2 << ") "
                     << "overlap_ratio=" << c.overlap_ratio << " "
+                    << "center_dx_ratio=" << c.center_dx_ratio << " "
+                    << "center_inside=" << (c.center_inside_region ? "yes" : "no") << " "
+                    << "score=" << c.score << " "
                     << "accepted=" << (c.accepted ? "yes" : "no") << "\n";
             }
         }
