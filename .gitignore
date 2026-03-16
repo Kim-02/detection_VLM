@@ -1,6 +1,6 @@
-.engine
-.jpg
-.pt
-.onnx
+*.engine
+*.jpg
+*.pt
+*.onnx
 app
 
