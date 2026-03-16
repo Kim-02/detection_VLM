@@ -35,12 +35,6 @@ int main() {
     std::cout << analyzer.resultsToText(risk_results) << "\n";
     std::cout << analyzer.debugResultsToText(risk_results) << "\n";
 
-    {
-        std::ofstream ofs(debug_text_path);
-        ofs << debug_text;
-    }
-    std::cout << "디버그 텍스트 저장 완료: " << debug_text_path << "\n";
-
     if (analyzer.hasAnyRisk(risk_results)) {
         std::cout << "=== PPE 위험 감지 ===\n";
 
