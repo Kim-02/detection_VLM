@@ -168,10 +168,10 @@ def vlm_worker(runner):
 
 
 def main():
-    model = YOLO("best.pt")
+    model = YOLO("best.engine")
     runner = smolVLrun.SmolVLMRunner()
 
-    cap = cv2.VideoCapture("people_fire.mp4")
+    cap = cv2.VideoCapture("non_people_fire.mp4")
     if not cap.isOpened():
         print("영상 파일을 열 수 없습니다: non_people_fire.mp4")
         return
