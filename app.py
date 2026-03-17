@@ -1,11 +1,16 @@
 import io
+from threading import Thread
 from typing import Dict, Optional
 
 import torch
 from PIL import Image
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
-from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+from fastapi.responses import StreamingResponse
+from transformers import (
+    AutoProcessor,
+    Qwen3VLForConditionalGeneration,
+    TextIteratorStreamer,
+)
 from qwen_vl_utils import process_vision_info
 
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct-FP8"
@@ -34,15 +39,12 @@ def resize_force_square(image: Image.Image, size: int = TARGET_SIZE) -> Image.Im
 
 def parse_scene_summary(raw_text: str) -> Dict[str, str]:
     result: Dict[str, str] = {}
-
     for line in raw_text.splitlines():
         line = line.strip()
         if not line or "=" not in line:
             continue
-
         key, value = line.split("=", 1)
         result[key.strip()] = value.strip()
-
     return result
 
 
@@ -86,6 +88,7 @@ No coordinates, confidence, class IDs, boxes, or reasoning.
         prompt += f"\n{user_prompt.strip()}"
 
     return prompt
+
 
 @app.get("/health")
 def health():
@@ -142,25 +145,34 @@ async def infer(
             return_tensors="pt",
         ).to(model.device)
 
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=24,
-                do_sample=False,
-            )
-
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):]
-            for in_ids, out_ids in zip(inputs.input_ids, output_ids)
-        ]
-
-        result_text = processor.batch_decode(
-            generated_ids_trimmed,
+        streamer = TextIteratorStreamer(
+            processor.tokenizer,
+            skip_prompt=True,
             skip_special_tokens=True,
-            clean_up_tokenization_spaces=False,
-        )[0].strip()
+        )
 
-        return JSONResponse(content={"result": result_text})
+        generation_kwargs = dict(
+            **inputs,
+            max_new_tokens=24,
+            do_sample=False,
+            streamer=streamer,
+        )
+
+        thread = Thread(target=model.generate, kwargs=generation_kwargs)
+        thread.start()
+
+        def stream_text():
+            try:
+                for chunk in streamer:
+                    # chunk를 바로 흘려보냄
+                    yield chunk
+            except Exception:
+                yield ""
+
+        return StreamingResponse(
+            stream_text(),
+            media_type="text/plain; charset=utf-8",
+        )
 
     except torch.cuda.OutOfMemoryError:
         raise HTTPException(status_code=500, detail="GPU 메모리 부족(OOM)")

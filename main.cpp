@@ -10,8 +10,15 @@
 
 static size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     const size_t total = size * nmemb;
+    std::string chunk(static_cast<char*>(contents), total);
+
+    // 누적 저장
     std::string* s = static_cast<std::string*>(userp);
-    s->append(static_cast<char*>(contents), total);
+    s->append(chunk);
+
+    // 즉시 출력
+    std::cout << chunk << std::flush;
+
     return total;
 }
 
