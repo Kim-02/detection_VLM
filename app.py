@@ -10,7 +10,12 @@ from fastapi.responses import JSONResponse
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 
-MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
+# FP8 모델 사용
+MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct-FP8"
+
+# max_pixels는 한 변 길이가 아니라 총 픽셀 수 기준
+# 640x640 제한
+MAX_PIXELS = 640 * 640
 
 app = FastAPI(title="Qwen3-VL YOLO-grounded Server")
 
@@ -18,7 +23,12 @@ app = FastAPI(title="Qwen3-VL YOLO-grounded Server")
 # -----------------------------
 # 모델 로드
 # -----------------------------
-processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+processor = AutoProcessor.from_pretrained(
+    MODEL_ID,
+    max_pixels=MAX_PIXELS,
+    trust_remote_code=True,
+)
+
 model = Qwen3VLForConditionalGeneration.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
@@ -41,20 +51,11 @@ DEFAULT_CLASS_MAP = {
 # -----------------------------
 # 유틸
 # -----------------------------
-def resize_keep_ratio(image: Image.Image, target_size: int = 664) -> Image.Image:
-    """
-    긴 변 기준이 아니라, 여기서는 사용자가 664x664로 넣는다고 했으므로
-    입력이 다르더라도 강제로 664x664로 맞추는 단순 버전.
-    YOLO 좌표가 원본 기준이라면 반드시 같은 해상도를 기준으로 넣어야 함.
-    """
-    return image.resize((target_size, target_size))
+def resize_force_664(image: Image.Image) -> Image.Image:
+    return image.resize((664, 664))
 
 
 def parse_detections_text(raw_text: str, class_map: Dict[int, str]) -> List[Dict[str, Any]]:
-    """
-    예시 입력:
-    [0] class=2 conf=0.799316 box=(540.75, 515.625, 998.25, 984.375)
-    """
     pattern = re.compile(
         r"\[(?P<idx>\d+)\]\s+class=(?P<class_id>\d+)\s+conf=(?P<conf>[0-9.]+)\s+box=\((?P<x1>[0-9.]+),\s*(?P<y1>[0-9.]+),\s*(?P<x2>[0-9.]+),\s*(?P<y2>[0-9.]+)\)"
     )
@@ -115,54 +116,48 @@ def summarize_detections(detections: List[Dict[str, Any]]) -> str:
 
 def build_prompt(user_prompt: Optional[str], detections_summary: str) -> str:
     base_prompt = f"""
-You are analyzing a single scene image for construction safety monitoring.
+You are a construction safety monitoring system.
 
-Use BOTH:
+You must use both:
 1) the image itself
-2) the YOLO detections provided below
+2) the YOLO detection information below
 
-YOLO detections are structured hints and should be treated as primary evidence for object presence and approximate location.
-Do not invent objects that are not visible or not supported by the detections.
-If something is uncertain, say it conservatively.
+The YOLO detections are the main evidence for object presence and approximate location.
+Do not invent anything that is not supported by the image or the detections.
+If something is uncertain, describe it conservatively.
 
 YOLO detection information:
 {detections_summary}
 
 Your task:
-- Output only 1 or 2 short lines in Korean.
-- Keep the answer concise and practical.
-- Focus only on these points:
-  1) whether workers are present
-  2) whether workers appear to be wearing helmets
-  3) whether workers appear to be wearing vests
-  4) whether fire or an obvious dangerous situation is visible
-- If there are workers without nearby helmet detections, describe them as workers possibly not wearing helmets.
-- If there are workers without nearby vest detections, describe them as workers possibly not wearing vests.
-- If all visible workers appear equipped properly, say so clearly.
-- If fire is visible, mention it first.
-- Do not mention coordinates, confidence scores, class IDs, or bounding boxes.
-- Do not explain your reasoning.
-- Do not use bullet points or numbering.
-- Use a natural Korean safety-report style.
+- Output only 1 or 2 sentences in Korean.
+- In the first sentence, explain why this alert was triggered.
+- The alert reason may include missing helmet, missing vest, worker presence, dangerous vehicle proximity, or suspected fire.
+- In the second sentence, briefly describe what is happening in the scene.
+- Mention visible workers, PPE status, and relevant hazards in a short and natural way.
+- Do not mention coordinates, confidence scores, class IDs, bounding boxes, or your reasoning process.
+- Keep the response short, practical, and report-like.
+- If the situation is not fully clear, use cautious expressions such as "appears to be" or "is suspected."
+- If there is no clear fire or major hazard, do not mention it unnecessarily.
 
-Example style:
-작업자들이 작업중이며, 안전모를 착용하지 않은 작업자 2명이 보입니다.
-작업자들이 안전모와 조끼를 착용하고 작업중입니다.
-작업장에 불이 났으며, 작업자는 보이지 않습니다.
+Example outputs:
+A worker without a helmet appears to be present, which triggered this alert. Workers are visible in the scene, and at least one appears to be working without a helmet.
+A worker without a vest appears to be present, which triggered this alert. Several workers are visible, and at least one appears to be without a safety vest.
+This alert was triggered because a worker is close to a dangerous vehicle. A worker and a vehicle are visible in close proximity in the scene.
+This alert was triggered because fire is suspected in the work area. Flames are visible, and no worker is clearly seen.
 """
 
     if user_prompt and user_prompt.strip():
-        base_prompt += f"\nAdditional instruction from user:\n{user_prompt.strip()}\n"
+        base_prompt += f"\nAdditional instruction:\n{user_prompt.strip()}\n"
 
     return base_prompt.strip()
-
 
 # -----------------------------
 # API
 # -----------------------------
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_ID}
+    return {"status": "ok", "model": MODEL_ID, "max_pixels": MAX_PIXELS}
 
 
 @app.post("/infer")
@@ -178,10 +173,9 @@ async def infer(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"이미지 로드 실패: {e}")
 
-    # 필요 시 664x664로 강제 리사이즈
-    image = resize_keep_ratio(image, 664)
+    # 입력 이미지는 664x664로 맞춤
+    image = resize_force_664(image)
 
-    # 클래스 맵 파싱
     class_map = DEFAULT_CLASS_MAP.copy()
     if class_map_json.strip():
         try:
@@ -227,7 +221,7 @@ async def infer(
         with torch.no_grad():
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=220,
+                max_new_tokens=64,   # 220 -> 64로 축소
                 do_sample=False,
             )
 
@@ -240,11 +234,9 @@ async def infer(
             generated_ids_trimmed,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False
-        )[0]
+        )[0].strip()
 
-        return JSONResponse(
-            content={"result": result_text}
-        )
+        return JSONResponse(content={"result": result_text})
 
     except torch.cuda.OutOfMemoryError:
         raise HTTPException(status_code=500, detail="GPU 메모리 부족(OOM)")
