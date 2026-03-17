@@ -6,3 +6,4 @@ app
 draw.py
 .venv
 __pycache__
+*.mp4
