@@ -82,53 +82,6 @@ static bool sendToInferServer(
     curl_easy_cleanup(curl);
     return true;
 }
-static std::string extractResultText(const std::string& json_text) {
-    const std::string key = "\"result\":";
-    std::size_t pos = json_text.find(key);
-    if (pos == std::string::npos) {
-        return "";
-    }
-
-    pos = json_text.find('"', pos + key.size());
-    if (pos == std::string::npos) {
-        return "";
-    }
-
-    ++pos; // 실제 문자열 시작
-    std::string result;
-    bool escape = false;
-
-    for (; pos < json_text.size(); ++pos) {
-        char c = json_text[pos];
-
-        if (escape) {
-            switch (c) {
-                case 'n': result.push_back('\n'); break;
-                case 't': result.push_back('\t'); break;
-                case 'r': result.push_back('\r'); break;
-                case '"': result.push_back('"'); break;
-                case '\\': result.push_back('\\'); break;
-                default: result.push_back(c); break;
-            }
-            escape = false;
-            continue;
-        }
-
-        if (c == '\\') {
-            escape = true;
-            continue;
-        }
-
-        if (c == '"') {
-            break;
-        }
-
-        result.push_back(c);
-    }
-
-    return result;
-}
-
 int main() {
     const std::string engine_path = "best.engine";
     const std::string input_image_path = "test.jpg";
@@ -184,14 +137,5 @@ int main() {
         return 1;
     }
 
-    const std::string result_text = extractResultText(response_body);
-
-    if (result_text.empty()) {
-        std::cerr << "[오류] result 파싱 실패\n";
-        std::cerr << response_body << "\n";
-        return 1;
-    }
-
-    std::cout << "[결과] " << result_text << "\n";
     return 0;
 }

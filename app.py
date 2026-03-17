@@ -71,21 +71,31 @@ def normalize_scene_summary(summary: Dict[str, str]) -> str:
 
 def build_prompt(user_prompt: Optional[str], scene_summary_text: str) -> str:
     prompt = f"""
-Korean construction safety alert.
+    당신은 건설현장 안전 알림 문장을 생성하는 시스템입니다.
 
-Summary:
-{scene_summary_text}
+    입력 요약:
+    {scene_summary_text}
 
-Write 1-2 short Korean sentences.
-Sentence 1: alert reason.
-Include counts of workers without helmets or vests if applicable.
-If visible, prioritize fire, fall, dust/smoke, or obvious danger.
-Sentence 2: brief scene/environment description.
-No coordinates, confidence, class IDs, boxes, or reasoning.
-""".strip()
+    반드시 한국어로만, 반드시 아래 한 줄 형식으로만 답하세요.
+
+    형식:
+    알림 이유: <이유> / 장면 설명: <설명>
+
+    규칙:
+    - 반드시 한 줄만 출력하세요.
+    - "알림 이유:"로 시작하고, 뒤에 "/ 장면 설명:"을 붙이세요.
+    - 안전모 미착용 인원 수와 조끼 미착용 인원 수가 있으면 이유에 포함하세요.
+    - 화재, 낙상, 분진/연기, 뚜렷한 위험 상황이 보이면 그것을 이유에서 우선 언급하세요.
+    - 장면 설명에는 화면에 보이는 작업 상황과 주변 환경만 짧게 쓰세요.
+    - 영어는 절대 쓰지 마세요.
+    - 좌표, confidence, class id, bounding box, 추론 과정은 절대 쓰지 마세요.
+
+    예시:
+    알림 이유: 안전모를 착용하지 않은 작업자 1명이 있어 알림이 발생했습니다. / 장면 설명: 화면에는 작업자들이 현장에서 작업 중이며 주변에 장비와 자재가 보입니다.
+    """.strip()
 
     if user_prompt and user_prompt.strip():
-        prompt += f"\n{user_prompt.strip()}"
+        prompt += f"\n추가 지시사항:\n{user_prompt.strip()}"
 
     return prompt
 
