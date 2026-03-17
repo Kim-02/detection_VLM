@@ -14,7 +14,7 @@ from transformers import (
 from qwen_vl_utils import process_vision_info
 
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct-FP8"
-TARGET_SIZE = 448
+TARGET_SIZE = 512
 MAX_PIXELS = TARGET_SIZE * TARGET_SIZE
 
 app = FastAPI(title="Qwen3-VL Scene-Summary Server")

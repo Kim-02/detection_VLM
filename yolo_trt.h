@@ -15,7 +15,7 @@ struct Detection {
 
 class YoloTrtDetector {
 public:
-    YoloTrtDetector(int input_w = 448, int input_h = 448,
+    YoloTrtDetector(int input_w = 512, int input_h = 512,
                     float conf_thresh = 0.25f, float nms_thresh = 0.45f);
     ~YoloTrtDetector();
 

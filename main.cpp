@@ -85,17 +85,17 @@ static bool sendToInferServer(
 int main() {
     const std::string engine_path = "best.engine";
     const std::string input_image_path = "test.jpg";
-    const std::string resized_image_path = "resized_448.jpg";
+    const std::string resized_image_path = "resized_512.jpg";
     const std::string infer_url = "http://127.0.0.1:8000/infer";
 
     std::cout << "[시작] YOLO + PPE 분석 + 서버 전송\n";
 
-    if (!ImageResizer::resizeTo448AndSave(input_image_path, resized_image_path)) {
+    if (!ImageResizer::resizeTo512AndSave(input_image_path, resized_image_path)) {
         std::cerr << "[오류] 이미지 리사이즈 실패\n";
         return 1;
     }
 
-    YoloTrtDetector detector(448, 448, 0.25f, 0.45f);
+    YoloTrtDetector detector(512, 512, 0.25f, 0.45f);
 
     if (!detector.loadEngine(engine_path)) {
         std::cerr << "[오류] TensorRT 엔진 로드 실패\n";
