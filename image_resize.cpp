@@ -3,16 +3,16 @@
 #include <iostream>
 #include <stdexcept>
 
-cv::Mat ImageResizer::resizeTo640(const std::string& imagePath) {
+cv::Mat ImageResizer::resizeTo448(const std::string& imagePath) {
     cv::Mat img = cv::imread(imagePath);
     if (img.empty()) {
         throw std::runtime_error("이미지 로드 실패: " + imagePath);
     }
 
-    return resizeTo640(img);
+    return resizeTo448(img);
 }
 
-cv::Mat ImageResizer::resizeTo640(const cv::Mat& input) {
+cv::Mat ImageResizer::resizeTo448(const cv::Mat& input) {
     if (input.empty()) {
         throw std::runtime_error("입력 이미지가 비어 있습니다.");
     }
@@ -22,9 +22,9 @@ cv::Mat ImageResizer::resizeTo640(const cv::Mat& input) {
     return resized;
 }
 
-bool ImageResizer::resizeTo640AndSave(const std::string& inputPath, const std::string& outputPath) {
+bool ImageResizer::resizeTo448AndSave(const std::string& inputPath, const std::string& outputPath) {
     try {
-        cv::Mat resized = resizeTo640(inputPath);
+        cv::Mat resized = resizeTo448(inputPath);
         if (!cv::imwrite(outputPath, resized)) {
             std::cerr << "리사이즈 이미지 저장 실패: " << outputPath << std::endl;
             return false;
