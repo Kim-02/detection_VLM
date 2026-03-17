@@ -55,7 +55,7 @@ static bool sendToInferServer(
     curl_mime_data(part, scene_summary.c_str(), CURL_ZERO_TERMINATED);
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_se    topt(curl, CURLOPT_MIMEPOST, mime);
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
