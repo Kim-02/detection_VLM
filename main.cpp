@@ -186,6 +186,5 @@ int main() {
     }
 
     std::cout << "[결과] " << result_text << "\n";
-    std::cout << result_text << "\n";
     return 0;
 }
