@@ -110,9 +110,13 @@ std::vector<PersonRiskResult> RiskAnalyzer::analyzePPE(const std::vector<Detecti
     std::vector<Detection> vests;
 
     for (const auto& d : dets) {
-        if (d.class_id == 2) persons.push_back(d);
-        else if (d.class_id == 0) helmets.push_back(d);
-        else if (d.class_id == 1) vests.push_back(d);
+        if (d.class_id == 2) {
+            persons.push_back(d);
+        } else if (d.class_id == 0) {
+            helmets.push_back(d);
+        } else if (d.class_id == 1) {
+            vests.push_back(d);
+        }
     }
 
     std::vector<PersonRiskResult> results;
@@ -183,5 +187,27 @@ std::string RiskAnalyzer::resultsToText(const std::vector<PersonRiskResult>& res
             << "msg=\"" << r.warning_message << "\"\n";
     }
 
+    return oss.str();
+}
+
+SceneRiskSummary RiskAnalyzer::summarizeScene(const std::vector<PersonRiskResult>& results) const {
+    SceneRiskSummary summary;
+    summary.worker_count = static_cast<int>(results.size());
+
+    for (const auto& r : results) {
+        if (!r.has_helmet) summary.no_helmet_count++;
+        if (!r.has_vest) summary.no_vest_count++;
+        if (r.is_risk) summary.has_any_risk = true;
+    }
+
+    return summary;
+}
+
+std::string RiskAnalyzer::sceneSummaryToText(const SceneRiskSummary& summary) const {
+    std::ostringstream oss;
+    oss << "workers=" << summary.worker_count << "\n";
+    oss << "workers_without_helmet=" << summary.no_helmet_count << "\n";
+    oss << "workers_without_vest=" << summary.no_vest_count << "\n";
+    oss << "has_any_risk=" << (summary.has_any_risk ? "yes" : "no") << "\n";
     return oss.str();
 }

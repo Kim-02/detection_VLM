@@ -5,14 +5,9 @@
 
 class ImageResizer {
 public:
-    // 이미지를 읽어서 664x664로 리사이즈 후 반환
-    static cv::Mat resizeTo664(const std::string& imagePath);
-
-    // 이미 로드된 Mat를 664x664로 리사이즈 후 반환
-    static cv::Mat resizeTo664(const cv::Mat& input);
-
-    // 이미지를 읽어서 664x664로 저장
-    static bool resizeTo664AndSave(const std::string& inputPath, const std::string& outputPath);
+    static cv::Mat resizeTo640(const std::string& imagePath);
+    static cv::Mat resizeTo640(const cv::Mat& input);
+    static bool resizeTo640AndSave(const std::string& inputPath, const std::string& outputPath);
 
 private:
     static constexpr int TARGET_W = 640;
