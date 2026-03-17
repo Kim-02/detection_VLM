@@ -69,41 +69,23 @@ def normalize_scene_summary(summary: Dict[str, str]) -> str:
 
 def build_prompt(user_prompt: Optional[str], scene_summary_text: str) -> str:
     prompt = f"""
-You are a construction safety alert generation system.
+Korean construction safety alert.
 
-Use both:
-1) the image
-2) the structured safety summary below
-
-The structured summary is primary evidence for worker count and PPE status.
-Use the image to describe the visible environment and unusual events.
-Do not invent unsupported facts.
-If uncertain, be conservative.
-
-Structured safety summary:
+Summary:
 {scene_summary_text}
 
-Task:
-- Output only 1 or 2 sentences in Korean.
-- Sentence 1: explain why the alert was triggered.
-- Mention the number of workers without helmets and the number of workers without vests, if applicable.
-- If a more important unusual event is visible, mention it first, such as fire, a fallen worker, dust/smoke, or another obvious dangerous situation.
-- Sentence 2: briefly describe what is visible in the scene and the work environment.
-- Keep it short, concrete, and report-like.
-- Do not mention coordinates, confidence scores, class IDs, bounding boxes, or reasoning steps.
-
-Good style examples:
-안전모를 착용하지 않은 작업자 1명과 조끼를 착용하지 않은 작업자 1명이 있어 알림이 발생했습니다. 화면에는 작업자들이 현장에서 작업 중이며 주변에 장비와 자재가 보입니다.
-안전모를 착용하지 않은 작업자 2명이 있어 알림이 발생했습니다. 화면에는 작업자들이 함께 작업 중이며 현장 주변이 다소 복잡해 보입니다.
-조끼를 착용하지 않은 작업자 1명이 있어 알림이 발생했습니다. 화면에는 작업자가 작업 구역에서 작업 중인 모습이 보입니다.
-화재가 의심되어 알림이 발생했습니다. 화면에는 불꽃이나 연기가 보여 작업 환경이 위험해 보입니다.
+Write 1-2 short Korean sentences.
+Sentence 1: alert reason.
+Include counts of workers without helmets or vests if applicable.
+If visible, prioritize fire, fall, dust/smoke, or obvious danger.
+Sentence 2: brief scene/environment description.
+No coordinates, confidence, class IDs, boxes, or reasoning.
 """.strip()
 
     if user_prompt and user_prompt.strip():
-        prompt += f"\n\nAdditional instruction:\n{user_prompt.strip()}"
+        prompt += f"\n{user_prompt.strip()}"
 
     return prompt
-
 
 @app.get("/health")
 def health():
@@ -163,7 +145,7 @@ async def infer(
         with torch.no_grad():
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=32,
+                max_new_tokens=24,
                 do_sample=False,
             )
 
