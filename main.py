@@ -168,7 +168,7 @@ def vlm_worker(runner):
 
 
 def main():
-    model = YOLO("best.engine")
+    model = YOLO("best.pt")
     runner = smolVLrun.SmolVLMRunner()
 
     cap = cv2.VideoCapture("non_people_fire.mp4")
