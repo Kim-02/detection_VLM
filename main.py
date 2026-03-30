@@ -5,9 +5,10 @@ import cv2
 from PIL import Image
 
 import yolo_detection
-import smolVLrun
+import qwen_tensorrt as tensorrt
 
 from ultralytics import YOLO
+
 
 event_queue = queue.Queue(maxsize=1)
 stop_event = threading.Event()
@@ -16,6 +17,7 @@ vlm_busy = False
 vlm_busy_lock = threading.Lock()
 last_vlm_trigger_time = 0.0
 VLM_TRIGGER_COOLDOWN = 5.0
+
 
 def draw_detections(frame, detections):
     output = frame.copy()
@@ -30,9 +32,7 @@ def draw_detections(frame, detections):
 
         label = f"{class_name} {conf:.2f}"
 
-        # 기본 색상
         color = (0, 255, 0)
-
         if class_name.lower() == "fire":
             color = (0, 0, 255)
         elif class_name.lower() == "smoke":
@@ -41,7 +41,6 @@ def draw_detections(frame, detections):
             color = (255, 0, 0)
 
         cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
-
         cv2.putText(
             output,
             label,
@@ -49,10 +48,12 @@ def draw_detections(frame, detections):
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
             color,
-            2
+            2,
         )
 
     return output
+
+
 def draw_status(frame, analysis):
     output = frame.copy()
 
@@ -73,10 +74,12 @@ def draw_status(frame, analysis):
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         color,
-        2
+        2,
     )
 
     return output
+
+
 def analyze_detected_classes(detections):
     person_count = 0
     has_fire = False
@@ -98,8 +101,10 @@ def analyze_detected_classes(detections):
         "has_smoke": has_smoke,
     }
 
+
 def resize_to_640(frame):
     return cv2.resize(frame, (640, 640))
+
 
 def is_vlm_busy():
     with vlm_busy_lock:
@@ -112,20 +117,40 @@ def set_vlm_busy(value: bool):
         vlm_busy = value
 
 
-def build_vlm_prompt():
-    return """
-Fire is present.
+def build_vlm_prompt(detections, analysis):
+    detection_lines = []
+    for i, det in enumerate(detections):
+        detection_lines.append(
+            f"[{i}] class={det['class_name']} conf={det['conf']:.2f} "
+            f"box=({int(det['x1'])}, {int(det['y1'])}, {int(det['x2'])}, {int(det['y2'])})"
+        )
+
+    detection_text = "\n".join(detection_lines) if detection_lines else "No detections"
+
+    return f"""
+You are a construction safety monitoring assistant.
 Reply in English only.
+
+Detected summary:
+- person_count: {analysis['person_count']}
+- fire: {'yes' if analysis['has_fire'] else 'no'}
+- smoke: {'yes' if analysis['has_smoke'] else 'no'}
+
+YOLO detections:
+{detection_text}
 
 Format:
 Scene: <one short sentence>
+Risk: <one short sentence>
 
 Rules:
-- Describe what is happening in the scene.
-- Mention visible surroundings briefly.
+- Use the image as the main evidence.
+- Use YOLO detections as supporting evidence.
 - Keep it short.
-- Do not write anything else.
+- Do not repeat the same fact.
+- If there is fire or smoke, mention it in Risk.
 """.strip()
+
 
 def vlm_worker(runner):
     while not stop_event.is_set():
@@ -138,26 +163,24 @@ def vlm_worker(runner):
 
         try:
             frame = item["frame"]
+            detections = item["detections"]
             analysis = item["analysis"]
-            timestamp = item["timestamp"]
 
-            # OpenCV BGR -> PIL RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(rgb_frame)
-
-            prompt = build_vlm_prompt()
+            prompt = build_vlm_prompt(detections, analysis)
 
             result_text = runner.infer(
                 image_input=pil_image,
                 user_text=prompt,
-                max_new_tokens=64
+                max_new_tokens=64,
             )
 
             if result_text:
-                print("[VLM 결과]")
+                print("[TensorRT Qwen 결과]")
                 print(result_text)
             else:
-                print("[VLM 결과] 유효한 문장을 생성하지 못했습니다.")
+                print("[TensorRT Qwen 결과] 유효한 문장을 생성하지 못했습니다.")
 
         except Exception as e:
             print(f"[VLM WORKER][오류] {e}")
@@ -169,7 +192,13 @@ def vlm_worker(runner):
 
 def main():
     model = YOLO("best.engine")
-    runner = smolVLrun.SmolVLMRunner()
+    runner = tensorrt.TensorRTQwenRunner(
+        engine_dir="~/edgellm_work/engines/qwen3-vl-2b",
+        multimodal_engine_dir="~/edgellm_work/visual_engines/qwen3-vl-2b",
+        llm_inference_bin="~/TensorRT-Edge-LLM/build/examples/llm/llm_inference",
+        plugin_path="~/TensorRT-Edge-LLM/build/libNvInfer_edgellm_plugin.so",
+        work_dir="~/edgellm_work/runtime",
+    )
 
     cap = cv2.VideoCapture("people_fire.mp4")
     if not cap.isOpened():
@@ -186,6 +215,8 @@ def main():
     worker = threading.Thread(target=vlm_worker, args=(runner,), daemon=True)
     worker.start()
 
+    global last_vlm_trigger_time
+
     while True:
         loop_start = time.time()
 
@@ -201,19 +232,20 @@ def main():
         display_frame = draw_status(display_frame, analysis)
         cv2.imshow("frame", display_frame)
 
-        global last_vlm_trigger_time
-
         if analysis["has_fire"]:
             now = time.time()
             if now - last_vlm_trigger_time >= VLM_TRIGGER_COOLDOWN:
                 if not is_vlm_busy() and event_queue.empty():
-                    event_queue.put({
-                        "frame": resize_frame.copy(),
-                        "analysis": analysis,
-                        "timestamp": now,
-                    })
+                    event_queue.put(
+                        {
+                            "frame": resize_frame.copy(),
+                            "detections": detections,
+                            "analysis": analysis,
+                            "timestamp": now,
+                        }
+                    )
                     last_vlm_trigger_time = now
-                    print("[MAIN] VLM 이벤트 전달")
+                    print("[MAIN] TensorRT Qwen 이벤트 전달")
 
         elapsed = time.time() - loop_start
         remaining = frame_interval - elapsed
