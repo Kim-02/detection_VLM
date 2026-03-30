@@ -125,30 +125,31 @@ def build_vlm_prompt(detections, analysis):
             f"box=({int(det['x1'])}, {int(det['y1'])}, {int(det['x2'])}, {int(det['y2'])})"
         )
 
-    detection_text = "\n".join(detection_lines) if detection_lines else "No detections"
+    detection_text = "\n".join(detection_lines) if detection_lines else "탐지 결과 없음"
 
     return f"""
-You are a construction safety monitoring assistant.
-Reply in English only.
+당신은 건설 현장 안전 모니터링 도우미입니다.
+반드시 한국어로만 답변하세요.
 
-Detected summary:
-- person_count: {analysis['person_count']}
-- fire: {'yes' if analysis['has_fire'] else 'no'}
-- smoke: {'yes' if analysis['has_smoke'] else 'no'}
+탐지 요약:
+- 사람 수: {analysis['person_count']}
+- 화재 여부: {'예' if analysis['has_fire'] else '아니오'}
+- 연기 여부: {'예' if analysis['has_smoke'] else '아니오'}
 
-YOLO detections:
+YOLO 탐지 결과:
 {detection_text}
 
-Format:
-Scene: <one short sentence>
-Risk: <one short sentence>
+출력 형식:
+위험상황: <짧게 1~2문장>
 
-Rules:
-- Use the image as the main evidence.
-- Use YOLO detections as supporting evidence.
-- Keep it short.
-- Do not repeat the same fact.
-- If there is fire or smoke, mention it in Risk.
+규칙:
+- 이미지를 가장 우선해서 판단하세요.
+- YOLO 탐지 결과는 보조 정보로만 사용하세요.
+- 위험한 상황이면 무엇이 위험한지 짧고 분명하게 설명하세요.
+- 위험하지 않으면 현재 상황을 짧게 설명하세요.
+- 불꽃이나 연기가 보이면 반드시 언급하세요.
+- 같은 내용을 반복하지 마세요.
+- 길게 쓰지 마세요.
 """.strip()
 
 
@@ -177,13 +178,14 @@ def vlm_worker(runner):
             )
 
             if result_text:
-                print("[TensorRT Qwen 결과]")
+                print("\n[위험 분석 결과]")
                 print(result_text)
+                print()
             else:
-                print("[TensorRT Qwen 결과] 유효한 문장을 생성하지 못했습니다.")
+                print("\n[위험 분석 결과] 유효한 문장을 생성하지 못했습니다.\n")
 
         except Exception as e:
-            print(f"[VLM WORKER][오류] {e}")
+            print(f"\n[VLM WORKER][오류] {e}\n")
 
         finally:
             set_vlm_busy(False)
@@ -232,7 +234,7 @@ def main():
         display_frame = draw_status(display_frame, analysis)
         cv2.imshow("frame", display_frame)
 
-        if analysis["has_fire"]:
+        if analysis["has_fire"] or analysis["has_smoke"]:
             now = time.time()
             if now - last_vlm_trigger_time >= VLM_TRIGGER_COOLDOWN:
                 if not is_vlm_busy() and event_queue.empty():
@@ -245,7 +247,7 @@ def main():
                         }
                     )
                     last_vlm_trigger_time = now
-                    print("[MAIN] TensorRT Qwen 이벤트 전달")
+                    print("[MAIN] TensorRT Qwen 위험 분석 이벤트 전달")
 
         elapsed = time.time() - loop_start
         remaining = frame_interval - elapsed

@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,7 @@ class TensorRTQwenRunner:
         llm_inference_bin: str = "~/TensorRT-Edge-LLM/build/examples/llm/llm_inference",
         plugin_path: str = "~/TensorRT-Edge-LLM/build/libNvInfer_edgellm_plugin.so",
         work_dir: str = "~/edgellm_work/runtime",
-        system_prompt: str = "You are a helpful safety assistant.",
+        system_prompt: str = "당신은 건설 현장 안전 도우미입니다.",
     ):
         self.engine_dir = os.path.expanduser(engine_dir)
         self.multimodal_engine_dir = os.path.expanduser(multimodal_engine_dir)
@@ -118,56 +117,66 @@ class TensorRTQwenRunner:
         return " ".join(lines).strip()
 
     def infer(self, image_input, user_text: str, max_new_tokens: int = 64) -> str:
-        timestamp = int(time.time() * 1000)
-        image_path = self.work_dir / f"frame_{timestamp}.jpg"
-        input_path = self.work_dir / f"input_{timestamp}.json"
-        output_path = self.work_dir / f"output_{timestamp}.json"
-
         if isinstance(image_input, str):
             image = Image.open(image_input).convert("RGB")
         else:
             image = image_input.convert("RGB")
 
-        image.save(image_path, quality=95)
-
-        payload = self._build_input_payload(str(image_path), user_text, max_new_tokens)
-        input_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
         env = os.environ.copy()
         env["EDGELLM_PLUGIN_PATH"] = self.plugin_path
 
-        cmd = [
-            self.llm_inference_bin,
-            "--engineDir", self.engine_dir,
-            "--multimodalEngineDir", self.multimodal_engine_dir,
-            "--inputFile", str(input_path),
-            "--outputFile", str(output_path),
-        ]
+        with tempfile.TemporaryDirectory(dir=self.work_dir) as tmpdir:
+            tmpdir_path = Path(tmpdir)
 
-        result = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+            image_path = tmpdir_path / "frame.jpg"
+            input_path = tmpdir_path / "input.json"
+            output_path = tmpdir_path / "output.json"
 
-        if result.returncode != 0:
-            raise RuntimeError(
-                "TensorRT Qwen 추론 실패\n"
-                f"returncode={result.returncode}\n"
-                f"stdout=\n{result.stdout}\n"
-                f"stderr=\n{result.stderr}"
+            image.save(image_path, quality=95)
+
+            payload = self._build_input_payload(
+                image_path=str(image_path),
+                user_text=user_text,
+                max_new_tokens=max_new_tokens,
+            )
+            input_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
 
-        if not output_path.exists():
-            raise RuntimeError(
-                "TensorRT Qwen 출력 파일이 생성되지 않았습니다.\n"
-                f"stdout=\n{result.stdout}\n"
-                f"stderr=\n{result.stderr}"
+            cmd = [
+                self.llm_inference_bin,
+                "--engineDir", self.engine_dir,
+                "--multimodalEngineDir", self.multimodal_engine_dir,
+                "--inputFile", str(input_path),
+                "--outputFile", str(output_path),
+            ]
+
+            result = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
             )
 
-        raw = output_path.read_text(encoding="utf-8")
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "TensorRT Qwen 추론 실패\n"
+                    f"returncode={result.returncode}\n"
+                    f"stdout=\n{result.stdout}\n"
+                    f"stderr=\n{result.stderr}"
+                )
+
+            if not output_path.exists():
+                raise RuntimeError(
+                    "TensorRT Qwen 출력 파일이 생성되지 않았습니다.\n"
+                    f"stdout=\n{result.stdout}\n"
+                    f"stderr=\n{result.stderr}"
+                )
+
+            raw = output_path.read_text(encoding="utf-8")
+
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
