@@ -103,56 +103,26 @@ class TensorRTQwenRunner:
         return False
 
     def _extract_text(self, data: Any) -> str:
-        if isinstance(data, str):
-            text = data.strip()
-            if not text or self._looks_like_path(text):
-                return ""
-            return text
-
         if isinstance(data, dict):
-            priority_keys = [
-                "text",
-                "content",
-                "output_text",
-                "generated_text",
-                "response",
-                "message",
-                "answer",
-            ]
+            if "output_text" in data and isinstance(data["output_text"], str):
+                return data["output_text"].strip()
 
-            for key in priority_keys:
-                if key in data:
-                    text = self._extract_text(data[key])
-                    if text:
-                        return text
+            if "output_text" in data:
+                return self._extract_text(data["output_text"])
 
-            # dict 전체를 무차별 탐색하면 input.json 경로 같은 문자열을
-            # 잘못 반환할 수 있으므로 제한적으로만 탐색
-            nested_keys = [
-                "result",
-                "results",
-                "outputs",
-                "choices",
-                "data",
-            ]
-            for key in nested_keys:
-                if key in data:
-                    text = self._extract_text(data[key])
-                    if text:
-                        return text
-
-            return ""
+            for value in data.values():
+                text = self._extract_text(value)
+                if text:
+                    return text
 
         if isinstance(data, list):
-            parts = []
             for item in data:
                 text = self._extract_text(item)
                 if text:
-                    parts.append(text)
+                    return text
 
-            # 너무 많은 조각이 붙는 걸 막기 위해 유효한 텍스트만 합침
-            merged = "\n".join(parts).strip()
-            return merged
+        if isinstance(data, str):
+            return data.strip()
 
         return ""
 
@@ -161,21 +131,8 @@ class TensorRTQwenRunner:
             return ""
 
         text = text.replace("Assistant:", "").replace("User:", "").strip()
-
-        if self._looks_like_path(text):
-            return ""
-
-        lines = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if self._looks_like_path(line):
-                continue
-            lines.append(line)
-
-        cleaned = " ".join(lines).strip()
-        return cleaned
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return " ".join(lines).strip()
 
     def infer(self, image_input, user_text: str, max_new_tokens: int = 64) -> str:
         if isinstance(image_input, str):
@@ -237,13 +194,13 @@ class TensorRTQwenRunner:
                 )
 
             raw = output_path.read_text(encoding="utf-8")
-            print("\n[DEBUG output.json 원문]")
-            print(raw)
-            print()
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             return self._clean_output(raw)
+
+        if isinstance(parsed, dict) and "output_text" in parsed:
+            return self._clean_output(parsed["output_text"])
 
         extracted = self._extract_text(parsed)
         return self._clean_output(extracted)
