@@ -159,10 +159,18 @@ class TensorRTQwenRunner:
                 f"raw=\n{raw}"
             )
 
-        if "output_text" not in parsed:
+        responses = parsed.get("responses")
+        if not isinstance(responses, list) or not responses:
             raise RuntimeError(
-                "TensorRT Qwen 출력에 output_text가 없습니다.\n"
+                "TensorRT Qwen 출력에 responses가 없거나 비어 있습니다.\n"
                 f"parsed=\n{json.dumps(parsed, ensure_ascii=False, indent=2)}"
             )
 
-        return self._clean_output(parsed["output_text"])
+        first_response = responses[0]
+        if not isinstance(first_response, dict) or "output_text" not in first_response:
+            raise RuntimeError(
+                "TensorRT Qwen 출력에 responses[0].output_text가 없습니다.\n"
+                f"parsed=\n{json.dumps(parsed, ensure_ascii=False, indent=2)}"
+            )
+
+        return self._clean_output(first_response["output_text"])
