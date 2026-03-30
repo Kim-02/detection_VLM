@@ -36,13 +36,22 @@ class TensorRTQwenRunner:
             "plugin_path": self.plugin_path,
         }
 
-        missing = [f"{name}={path}" for name, path in required_paths.items() if not os.path.exists(path)]
+        missing = [
+            f"{name}={path}"
+            for name, path in required_paths.items()
+            if not os.path.exists(path)
+        ]
         if missing:
             raise FileNotFoundError(
                 "TensorRT Qwen 실행에 필요한 경로가 없습니다:\n" + "\n".join(missing)
             )
 
-    def _build_input_payload(self, image_path: str, user_text: str, max_new_tokens: int) -> dict[str, Any]:
+    def _build_input_payload(
+        self,
+        image_path: str,
+        user_text: str,
+        max_new_tokens: int,
+    ) -> dict[str, Any]:
         return {
             "batch_size": 1,
             "temperature": 0.0,
@@ -74,9 +83,31 @@ class TensorRTQwenRunner:
             ],
         }
 
+    def _looks_like_path(self, text: str) -> bool:
+        if not text:
+            return False
+
+        text = text.strip()
+        lowered = text.lower()
+
+        if lowered.endswith((".json", ".jpg", ".jpeg", ".png", ".bmp", ".webp")):
+            return True
+        if lowered.startswith("/home/") or lowered.startswith("/tmp/"):
+            return True
+        if "/" in text and any(
+            lowered.endswith(ext)
+            for ext in (".json", ".jpg", ".jpeg", ".png", ".bmp", ".webp")
+        ):
+            return True
+
+        return False
+
     def _extract_text(self, data: Any) -> str:
         if isinstance(data, str):
-            return data.strip()
+            text = data.strip()
+            if not text or self._looks_like_path(text):
+                return ""
+            return text
 
         if isinstance(data, dict):
             priority_keys = [
@@ -86,17 +117,31 @@ class TensorRTQwenRunner:
                 "generated_text",
                 "response",
                 "message",
+                "answer",
             ]
+
             for key in priority_keys:
                 if key in data:
                     text = self._extract_text(data[key])
                     if text:
                         return text
 
-            for value in data.values():
-                text = self._extract_text(value)
-                if text:
-                    return text
+            # dict 전체를 무차별 탐색하면 input.json 경로 같은 문자열을
+            # 잘못 반환할 수 있으므로 제한적으로만 탐색
+            nested_keys = [
+                "result",
+                "results",
+                "outputs",
+                "choices",
+                "data",
+            ]
+            for key in nested_keys:
+                if key in data:
+                    text = self._extract_text(data[key])
+                    if text:
+                        return text
+
+            return ""
 
         if isinstance(data, list):
             parts = []
@@ -104,7 +149,10 @@ class TensorRTQwenRunner:
                 text = self._extract_text(item)
                 if text:
                     parts.append(text)
-            return "\n".join(parts).strip()
+
+            # 너무 많은 조각이 붙는 걸 막기 위해 유효한 텍스트만 합침
+            merged = "\n".join(parts).strip()
+            return merged
 
         return ""
 
@@ -113,8 +161,21 @@ class TensorRTQwenRunner:
             return ""
 
         text = text.replace("Assistant:", "").replace("User:", "").strip()
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        return " ".join(lines).strip()
+
+        if self._looks_like_path(text):
+            return ""
+
+        lines = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if self._looks_like_path(line):
+                continue
+            lines.append(line)
+
+        cleaned = " ".join(lines).strip()
+        return cleaned
 
     def infer(self, image_input, user_text: str, max_new_tokens: int = 64) -> str:
         if isinstance(image_input, str):
@@ -182,4 +243,5 @@ class TensorRTQwenRunner:
         except json.JSONDecodeError:
             return self._clean_output(raw)
 
-        return self._clean_output(self._extract_text(parsed))
+        extracted = self._extract_text(parsed)
+        return self._clean_output(extracted)
