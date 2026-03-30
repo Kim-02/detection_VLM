@@ -237,7 +237,9 @@ class TensorRTQwenRunner:
                 )
 
             raw = output_path.read_text(encoding="utf-8")
-
+            print("\n[DEBUG output.json 원문]")
+            print(raw)
+            print()
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
