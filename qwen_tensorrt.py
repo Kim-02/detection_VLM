@@ -3,7 +3,6 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
 
 from PIL import Image
 
@@ -51,7 +50,7 @@ class TensorRTQwenRunner:
         image_path: str,
         user_text: str,
         max_new_tokens: int,
-    ) -> dict[str, Any]:
+    ) -> dict:
         return {
             "batch_size": 1,
             "temperature": 0.0,
@@ -82,49 +81,6 @@ class TensorRTQwenRunner:
                 }
             ],
         }
-
-    def _looks_like_path(self, text: str) -> bool:
-        if not text:
-            return False
-
-        text = text.strip()
-        lowered = text.lower()
-
-        if lowered.endswith((".json", ".jpg", ".jpeg", ".png", ".bmp", ".webp")):
-            return True
-        if lowered.startswith("/home/") or lowered.startswith("/tmp/"):
-            return True
-        if "/" in text and any(
-            lowered.endswith(ext)
-            for ext in (".json", ".jpg", ".jpeg", ".png", ".bmp", ".webp")
-        ):
-            return True
-
-        return False
-
-    def _extract_text(self, data: Any) -> str:
-        if isinstance(data, dict):
-            if "output_text" in data and isinstance(data["output_text"], str):
-                return data["output_text"].strip()
-
-            if "output_text" in data:
-                return self._extract_text(data["output_text"])
-
-            for value in data.values():
-                text = self._extract_text(value)
-                if text:
-                    return text
-
-        if isinstance(data, list):
-            for item in data:
-                text = self._extract_text(item)
-                if text:
-                    return text
-
-        if isinstance(data, str):
-            return data.strip()
-
-        return ""
 
     def _clean_output(self, text: str) -> str:
         if not text:
@@ -194,13 +150,19 @@ class TensorRTQwenRunner:
                 )
 
             raw = output_path.read_text(encoding="utf-8")
+
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            return self._clean_output(raw)
+            raise RuntimeError(
+                "TensorRT Qwen 출력 JSON 파싱 실패\n"
+                f"raw=\n{raw}"
+            )
 
-        if isinstance(parsed, dict) and "output_text" in parsed:
-            return self._clean_output(parsed["output_text"])
+        if "output_text" not in parsed:
+            raise RuntimeError(
+                "TensorRT Qwen 출력에 output_text가 없습니다.\n"
+                f"parsed=\n{json.dumps(parsed, ensure_ascii=False, indent=2)}"
+            )
 
-        extracted = self._extract_text(parsed)
-        return self._clean_output(extracted)
+        return self._clean_output(parsed["output_text"])
