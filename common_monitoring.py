@@ -262,9 +262,9 @@ def now_kst_iso() -> str:
     return datetime.now(kst).isoformat(timespec="seconds")
 
 
-def post_internal_vlm_analysis(camera_ip: str, ev_code_name: str, risk_text: str, event_time: str):
+def post_internal_vlm_analysis(ip_addr: str, ev_code_name: str, risk_text: str, event_time: str):
     payload = {
-        "camera_ip": camera_ip,
+        "ip_addr": ip_addr,
         "ev_code_name": ev_code_name,
         "risk_text": risk_text,
         "time": event_time,
@@ -296,7 +296,7 @@ def send_internal_vlm_if_needed(source_name: str, analysis, detections, risk_tex
 
     try:
         post_internal_vlm_analysis(
-            camera_ip=source_name,
+            ip_addr=source_name,
             ev_code_name=ev_code_name,
             risk_text=risk_text,
             event_time=event_time,
