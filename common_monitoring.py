@@ -57,7 +57,7 @@ class SharedState:
 
         self.internal_vlm_analysis_lock = threading.Lock()
         self.internal_vlm_analysis = None
-        self.internal_vlm_callback_url = "http://127.0.0.1:9000/api/internal/vlm-analysis"
+        self.internal_vlm_callback_url = "http://127.0.0.1:8000/api/internal/vlm-analysis"
 
         self.stream_frame_lock = threading.Lock()
         self.latest_stream_frame = None
