@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
+from urllib import request as urllib_request
 from urllib.parse import quote
 
 import cv2
@@ -13,10 +16,6 @@ from ultralytics import YOLO
 
 import qwen_tensorrt as tensorrt
 import yolo_detection
-
-import json
-from datetime import datetime, timezone, timedelta
-from urllib import request as urllib_request
 
 
 BASE_DIR = Path.home() / "detection_VLM"
@@ -31,47 +30,44 @@ class SharedState:
     def __init__(self):
         self.model_status = {"model": "loading"}
         self.model_lock = threading.Lock()
+
         self.latest_risk_lock = threading.Lock()
-        self.latest_risk = {"risk_text": None, "updated_at": None, "source_name": None, "analysis": None, "detections": None}
-        self.camera_state_lock = threading.Lock()
-        self.camera_state = {
-            "registered": False, "ip_address": None, "camera_id": None, "camera_pw": None,
-            "rtsp_port": 554, "rtsp_path": "/stream1", "last_health": None
+        self.latest_risk = {
+            "risk_text": None,
+            "updated_at": None,
+            "source_name": None,
+            "analysis": None,
+            "detections": None,
         }
+
         self.video_state_lock = threading.Lock()
-        self.video_state = {"running": False, "video_name": None, "last_frame_path": None, "last_frame_updated_at": None, "last_error": None}
+        self.video_state = {
+            "running": False,
+            "video_name": None,
+            "last_frame_path": None,
+            "last_frame_updated_at": None,
+            "last_error": None,
+        }
+
         self.video_worker_thread: Optional[threading.Thread] = None
         self.video_stop_event = threading.Event()
+
         self.yolo_model: Optional[YOLO] = None
         self.qwen_runner: Optional[tensorrt.TensorRTQwenRunner] = None
+
         self.internal_vlm_analysis_lock = threading.Lock()
         self.internal_vlm_analysis = None
-        self.internal_vlm_callback_url = "http://127.0.0.1:8000/api/internal/vlm-analysis"
+        self.internal_vlm_callback_url = "http://127.0.0.1:9000/api/internal/vlm-analysis"
+
+        self.stream_frame_lock = threading.Lock()
+        self.latest_stream_frame = None
+
         self.vlm_cooldown_lock = threading.Lock()
         self.vlm_cooldown_seconds = 30.0
         self.last_vlm_trigger_by_source = {}
 
 
 state = SharedState()
-
-def can_run_vlm(source_name: Optional[str]) -> bool:
-    if not source_name:
-        return True
-
-    now = time.time()
-    with state.vlm_cooldown_lock:
-        last_ts = state.last_vlm_trigger_by_source.get(source_name)
-        if last_ts is None:
-            return True
-        return (now - last_ts) >= state.vlm_cooldown_seconds
-
-
-def mark_vlm_trigger(source_name: Optional[str]) -> None:
-    if not source_name:
-        return
-
-    with state.vlm_cooldown_lock:
-        state.last_vlm_trigger_by_source[source_name] = time.time()
 
 
 def startup_models():
@@ -102,11 +98,14 @@ def resize_to_640(frame):
 
 def draw_detections(frame, detections):
     output = frame.copy()
+
     for det in detections:
         x1, y1, x2, y2 = map(int, (det["x1"], det["y1"], det["x2"], det["y2"]))
         class_name = det["class_name"]
         conf = det["conf"]
+
         label = f"{class_name} {conf:.2f}"
+
         color = (0, 255, 0)
         if class_name.lower() == "fire":
             color = (0, 0, 255)
@@ -114,16 +113,42 @@ def draw_detections(frame, detections):
             color = (0, 165, 255)
         elif class_name.lower() == "person":
             color = (255, 0, 0)
+
         cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(output, label, (x1, max(20, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        cv2.putText(
+            output,
+            label,
+            (x1, max(20, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
+
     return output
 
 
 def draw_status(frame, analysis):
     output = frame.copy()
-    text = f"person: {analysis['person_count']}  fire: {'yes' if analysis['has_fire'] else 'no'}  smoke: {'yes' if analysis['has_smoke'] else 'no'}"
+
+    text = (
+        f"person: {analysis['person_count']}  "
+        f"fire: {'yes' if analysis['has_fire'] else 'no'}  "
+        f"smoke: {'yes' if analysis['has_smoke'] else 'no'}"
+    )
+
     color = (0, 0, 255) if (analysis["has_fire"] or analysis["has_smoke"]) else (255, 255, 255)
-    cv2.putText(output, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+    cv2.putText(
+        output,
+        text,
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        color,
+        2,
+    )
+
     return output
 
 
@@ -131,6 +156,7 @@ def analyze_detected_classes(detections):
     person_count = 0
     has_fire = False
     has_smoke = False
+
     for det in detections:
         class_name = det.get("class_name", "").lower()
         if class_name == "person":
@@ -139,14 +165,24 @@ def analyze_detected_classes(detections):
             has_fire = True
         elif class_name == "smoke":
             has_smoke = True
-    return {"person_count": person_count, "has_fire": has_fire, "has_smoke": has_smoke}
+
+    return {
+        "person_count": person_count,
+        "has_fire": has_fire,
+        "has_smoke": has_smoke,
+    }
 
 
 def build_vlm_prompt(detections, analysis):
     detection_lines = []
     for i, det in enumerate(detections):
-        detection_lines.append(f"[{i}] class={det['class_name']} conf={det['conf']:.2f} box=({int(det['x1'])}, {int(det['y1'])}, {int(det['x2'])}, {int(det['y2'])})")
+        detection_lines.append(
+            f"[{i}] class={det['class_name']} conf={det['conf']:.2f} "
+            f"box=({int(det['x1'])}, {int(det['y1'])}, {int(det['x2'])}, {int(det['y2'])})"
+        )
+
     detection_text = "\n".join(detection_lines) if detection_lines else "탐지 결과 없음"
+
     return f"""당신은 건설 현장 안전 모니터링 도우미입니다.
 반드시 한국어로만 답변하세요.
 
@@ -188,63 +224,30 @@ def update_last_frame(display_frame):
         state.video_state["last_frame_updated_at"] = int(time.time() * 1000)
 
 
-def run_single_frame_analysis(frame, source_name: Optional[str] = None):
-    if state.yolo_model is None or state.qwen_runner is None:
-        raise RuntimeError("모델이 아직 로드되지 않았습니다.")
-    resize_frame = resize_to_640(frame)
-    detections = yolo_detection.detect_positions_with_class_on_frame(state.yolo_model, resize_frame)
-    analysis = analyze_detected_classes(detections)
-    display_frame = draw_detections(resize_frame, detections)
-    display_frame = draw_status(display_frame, analysis)
-    update_last_frame(display_frame)
-    risk_text = None
-    if analysis["has_fire"] or analysis["has_smoke"]:
-        if can_run_vlm(source_name):
-            rgb_frame = cv2.cvtColor(resize_frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb_frame)
-            prompt = build_vlm_prompt(detections, analysis)
-
-            risk_text = state.qwen_runner.infer(
-                image_input=pil_image,
-                user_text=prompt,
-                max_new_tokens=64,
-            )
-
-            mark_vlm_trigger(source_name)
-            update_latest_risk(risk_text, source_name, analysis, detections)
-
-            if source_name:
-                send_internal_vlm_if_needed(
-                    source_name=source_name,
-                    analysis=analysis,
-                    detections=detections,
-                    risk_text=risk_text,
-                )
-    return {"detections": detections, "analysis": analysis, "risk_text": risk_text, "frame_path": str(LAST_FRAME_PATH)}
+def update_latest_stream_frame(display_frame):
+    with state.stream_frame_lock:
+        state.latest_stream_frame = display_frame.copy()
 
 
-def build_rtsp_url(ip_address: str, camera_id: str, camera_pw: str, rtsp_port: int = 554, rtsp_path: str = "/stream1") -> str:
-    user = quote(camera_id, safe="")
-    password = quote(camera_pw, safe="")
-    path = rtsp_path if rtsp_path.startswith("/") else f"/{rtsp_path}"
-    return f"rtsp://{user}:{password}@{ip_address}:{rtsp_port}{path}"
+def can_run_vlm(source_name: Optional[str]) -> bool:
+    if not source_name:
+        return True
+
+    now = time.time()
+    with state.vlm_cooldown_lock:
+        last_ts = state.last_vlm_trigger_by_source.get(source_name)
+        if last_ts is None:
+            return True
+        return (now - last_ts) >= state.vlm_cooldown_seconds
 
 
-def test_rtsp_connection(rtsp_url: str) -> bool:
-    cap = cv2.VideoCapture(rtsp_url)
-    if not cap.isOpened():
-        cap.release()
-        return False
-    ret, _ = cap.read()
-    cap.release()
-    return bool(ret)
+def mark_vlm_trigger(source_name: Optional[str]) -> None:
+    if not source_name:
+        return
 
+    with state.vlm_cooldown_lock:
+        state.last_vlm_trigger_by_source[source_name] = time.time()
 
-def mjpeg_frame_bytes(frame):
-    ok, encoded = cv2.imencode(".jpg", frame)
-    if not ok:
-        return None
-    return b"--frame\r\n" + b"Content-Type: image/jpeg\r\n\r\n" + encoded.tobytes() + b"\r\n"
 
 def resolve_ev_code_name(analysis, detections) -> str:
     if analysis.get("has_fire"):
@@ -300,3 +303,80 @@ def send_internal_vlm_if_needed(source_name: str, analysis, detections, risk_tex
         )
     except Exception as e:
         print(f"[internal vlm-analysis 전송 실패] {e}", flush=True)
+
+
+def run_single_frame_analysis(frame, source_name: Optional[str] = None):
+    if state.yolo_model is None or state.qwen_runner is None:
+        raise RuntimeError("모델이 아직 로드되지 않았습니다.")
+
+    resize_frame = resize_to_640(frame)
+    detections = yolo_detection.detect_positions_with_class_on_frame(state.yolo_model, resize_frame)
+    analysis = analyze_detected_classes(detections)
+
+    display_frame = draw_detections(resize_frame, detections)
+    display_frame = draw_status(display_frame, analysis)
+
+    update_last_frame(display_frame)
+    update_latest_stream_frame(display_frame)
+
+    risk_text = None
+    if analysis["has_fire"] or analysis["has_smoke"]:
+        if can_run_vlm(source_name):
+            rgb_frame = cv2.cvtColor(resize_frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            prompt = build_vlm_prompt(detections, analysis)
+
+            risk_text = state.qwen_runner.infer(
+                image_input=pil_image,
+                user_text=prompt,
+                max_new_tokens=64,
+            )
+
+            mark_vlm_trigger(source_name)
+            update_latest_risk(risk_text, source_name, analysis, detections)
+
+            if source_name:
+                send_internal_vlm_if_needed(
+                    source_name=source_name,
+                    analysis=analysis,
+                    detections=detections,
+                    risk_text=risk_text,
+                )
+
+    return {
+        "detections": detections,
+        "analysis": analysis,
+        "risk_text": risk_text,
+        "frame_path": str(LAST_FRAME_PATH),
+    }
+
+
+def build_rtsp_url(ip_address: str, camera_id: str, camera_pw: str, rtsp_port: int = 554, rtsp_path: str = "/stream1") -> str:
+    user = quote(camera_id, safe="")
+    password = quote(camera_pw, safe="")
+    path = rtsp_path if rtsp_path.startswith("/") else f"/{rtsp_path}"
+    return f"rtsp://{user}:{password}@{ip_address}:{rtsp_port}{path}"
+
+
+def test_rtsp_connection(rtsp_url: str) -> bool:
+    cap = cv2.VideoCapture(rtsp_url)
+    if not cap.isOpened():
+        cap.release()
+        return False
+
+    ret, _ = cap.read()
+    cap.release()
+    return bool(ret)
+
+
+def mjpeg_frame_bytes(frame):
+    ok, encoded = cv2.imencode(".jpg", frame)
+    if not ok:
+        return None
+
+    return (
+        b"--frame\r\n"
+        b"Content-Type: image/jpeg\r\n\r\n" +
+        encoded.tobytes() +
+        b"\r\n"
+    )
