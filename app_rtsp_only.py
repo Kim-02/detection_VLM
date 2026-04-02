@@ -28,6 +28,12 @@ class CameraHealthResponse(BaseModel):
     status: str = Field(..., example="success")
     message: str = Field(..., example="카메라 연결 정상")
 
+class InternalVLMAnalysisRequest(BaseModel):
+    camera_ip: str = Field(..., example="192.168.0.40")
+    ev_code_name: str = Field(..., example="FALL_DETECTED")
+    risk_text: str = Field(..., example="1구역 cam-01에서 낙상 위험이 감지되었습니다.")
+    time: str = Field(..., example="2026-03-31T22:10:00+09:00")
+
 
 @app.on_event("startup")
 def startup_event():
@@ -39,6 +45,8 @@ def cam_stream_generator():
     with state.camera_state_lock:
         if not state.camera_state["registered"]:
             raise RuntimeError("등록된 카메라가 없습니다.")
+
+        camera_ip = state.camera_state["ip_address"]
         rtsp_url = build_rtsp_url(
             ip_address=state.camera_state["ip_address"],
             camera_id=state.camera_state["camera_id"],
@@ -55,7 +63,11 @@ def cam_stream_generator():
             ret, frame = cap.read()
             if not ret:
                 break
-            result = run_single_frame_analysis(frame, source_name="camera")
+            result = run_single_frame_analysis(
+                frame,
+                source_name="camera",
+                camera_ip=camera_ip,
+            )
             display_frame = cv2.imread(result["frame_path"])
             if display_frame is None:
                 continue
@@ -149,3 +161,14 @@ def camera_stream():
         if not state.camera_state["registered"]:
             raise HTTPException(status_code=404, detail="등록된 카메라가 없습니다.")
     return StreamingResponse(cam_stream_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.post("/api/internal/vlm-analysis", tags=["internal"])
+def receive_internal_vlm_analysis(req: InternalVLMAnalysisRequest):
+    with state.internal_vlm_analysis_lock:
+        state.internal_vlm_analysis = req.dict()
+    return {"status": "ok"}
+
+@app.get("/api/internal/vlm-analysis/latest", tags=["internal"])
+def get_internal_vlm_analysis_latest():
+    with state.internal_vlm_analysis_lock:
+        return state.internal_vlm_analysis or {}

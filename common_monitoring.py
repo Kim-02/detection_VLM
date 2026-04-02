@@ -13,6 +13,9 @@ from ultralytics import YOLO
 
 import qwen_tensorrt as tensorrt
 import yolo_detection
+import json
+from datetime import datetime, timezone, timedelta
+from urllib import request as urllib_request
 
 
 BASE_DIR = Path.home() / "detection_VLM"
@@ -40,6 +43,9 @@ class SharedState:
         self.video_stop_event = threading.Event()
         self.yolo_model: Optional[YOLO] = None
         self.qwen_runner: Optional[tensorrt.TensorRTQwenRunner] = None
+        self.internal_vlm_analysis_lock = threading.Lock()
+        self.internal_vlm_analysis = None
+        self.internal_vlm_callback_url = "http://127.0.0.1:8000/api/internal/vlm-analysis"
 
 
 state = SharedState()
@@ -159,7 +165,11 @@ def update_last_frame(display_frame):
         state.video_state["last_frame_updated_at"] = int(time.time() * 1000)
 
 
-def run_single_frame_analysis(frame, source_name: Optional[str] = None):
+def run_single_frame_analysis(
+    frame,
+    source_name: Optional[str] = None,
+    camera_ip: Optional[str] = None,
+):
     if state.yolo_model is None or state.qwen_runner is None:
         raise RuntimeError("모델이 아직 로드되지 않았습니다.")
     resize_frame = resize_to_640(frame)
@@ -173,8 +183,26 @@ def run_single_frame_analysis(frame, source_name: Optional[str] = None):
         rgb_frame = cv2.cvtColor(resize_frame, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(rgb_frame)
         prompt = build_vlm_prompt(detections, analysis)
-        risk_text = state.qwen_runner.infer(image_input=pil_image, user_text=prompt, max_new_tokens=64)
+        risk_text = state.qwen_runner.infer(
+            image_input=pil_image,
+            user_text=prompt,
+            max_new_tokens=64,
+        )
+
         update_latest_risk(risk_text, source_name, analysis, detections)
+
+        if camera_ip:
+            ev_code_name = resolve_ev_code_name(analysis, detections)
+            event_time = now_kst_iso()
+            try:
+                post_internal_vlm_analysis(
+                    camera_ip=camera_ip,
+                    ev_code_name=ev_code_name,
+                    risk_text=risk_text,
+                    event_time=event_time,
+                )
+            except Exception as e:
+                print(f"[internal vlm-analysis 전송 실패] {e}", flush=True)
     return {"detections": detections, "analysis": analysis, "risk_text": risk_text, "frame_path": str(LAST_FRAME_PATH)}
 
 
@@ -200,3 +228,35 @@ def mjpeg_frame_bytes(frame):
     if not ok:
         return None
     return b"--frame\r\n" + b"Content-Type: image/jpeg\r\n\r\n" + encoded.tobytes() + b"\r\n"
+
+def resolve_ev_code_name(analysis, detections) -> str:
+    if analysis.get("has_fire"):
+        return "FIRE_DETECTED"
+    if analysis.get("has_smoke"):
+        return "SMOKE_DETECTED"
+    return "RISK_DETECTED"
+
+
+def now_kst_iso() -> str:
+    kst = timezone(timedelta(hours=9))
+    return datetime.now(kst).isoformat(timespec="seconds")
+
+
+def post_internal_vlm_analysis(camera_ip: str, ev_code_name: str, risk_text: str, event_time: str):
+    payload = {
+        "camera_ip": camera_ip,
+        "ev_code_name": ev_code_name,
+        "risk_text": risk_text,
+        "time": event_time,
+    }
+
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(
+        state.internal_vlm_callback_url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    with urllib_request.urlopen(req, timeout=3) as resp:
+        return resp.read().decode("utf-8")
