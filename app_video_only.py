@@ -7,10 +7,19 @@ from pathlib import Path
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from common_monitoring import VIDEO_DIR, ensure_models_ready, run_single_frame_analysis, startup_models, state
+
+from common_monitoring import (
+    VIDEO_DIR,
+    LAST_FRAME_PATH,
+    ensure_models_ready,
+    mjpeg_frame_bytes,
+    run_single_frame_analysis,
+    startup_models,
+    state,
+)
 
 
 app = FastAPI(title="Safety Monitoring API - Video", description="동영상 파일 기반 안전 모니터링 API", version="1.0.0")
@@ -64,6 +73,23 @@ def video_worker(video_path: Path):
         state.video_stop_event.clear()
         state.video_worker_thread = None
 
+def video_stream_generator():
+    while True:
+        with state.video_state_lock:
+            running = state.video_state["running"]
+
+        if LAST_FRAME_PATH.exists():
+            frame = cv2.imread(str(LAST_FRAME_PATH))
+            if frame is not None:
+                chunk = mjpeg_frame_bytes(frame)
+                if chunk is not None:
+                    yield chunk
+
+        if not running:
+            time.sleep(0.2)
+        else:
+            time.sleep(0.03)
+
 
 @app.get("/vlm/api/model/health")
 def get_model_status():
@@ -75,21 +101,6 @@ def get_model_status():
 def get_video_status():
     with state.video_state_lock:
         return state.video_state
-
-
-@app.get("/risk/latest")
-def get_latest_risk():
-    with state.latest_risk_lock:
-        return state.latest_risk
-
-
-@app.get("/frame/latest")
-def get_latest_frame():
-    path = state.video_state.get("last_frame_path")
-    if not path:
-        raise HTTPException(status_code=404, detail="아직 생성된 분석 프레임이 없습니다.")
-    return FileResponse(path, media_type="image/jpeg")
-
 
 @app.post("/analyze/frame")
 async def analyze_frame(file: UploadFile = File(...)):
@@ -135,3 +146,30 @@ def receive_internal_vlm_analysis(req: InternalVLMAnalysisRequest):
 def get_internal_vlm_analysis_latest():
     with state.internal_vlm_analysis_lock:
         return state.internal_vlm_analysis or {}
+    
+
+@app.get("/cam", response_class=HTMLResponse)
+def camera_page():
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Video YOLO Monitor</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
+            img { max-width: 95vw; border: 2px solid #444; margin-top: 20px; }
+        </style>
+    </head>
+    <body>
+        <h1>동영상 YOLO 분석 화면</h1>
+        <img src="/cam/stream" alt="video stream" />
+    </body>
+    </html>
+    '''
+
+@app.get("/cam/stream")
+def camera_stream():
+    return StreamingResponse(
+        video_stream_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )

@@ -47,9 +47,31 @@ class SharedState:
         self.internal_vlm_analysis_lock = threading.Lock()
         self.internal_vlm_analysis = None
         self.internal_vlm_callback_url = "http://127.0.0.1:8000/api/internal/vlm-analysis"
+        self.vlm_cooldown_lock = threading.Lock()
+        self.vlm_cooldown_seconds = 30.0
+        self.last_vlm_trigger_by_source = {}
 
 
 state = SharedState()
+
+def can_run_vlm(source_name: Optional[str]) -> bool:
+    if not source_name:
+        return True
+
+    now = time.time()
+    with state.vlm_cooldown_lock:
+        last_ts = state.last_vlm_trigger_by_source.get(source_name)
+        if last_ts is None:
+            return True
+        return (now - last_ts) >= state.vlm_cooldown_seconds
+
+
+def mark_vlm_trigger(source_name: Optional[str]) -> None:
+    if not source_name:
+        return
+
+    with state.vlm_cooldown_lock:
+        state.last_vlm_trigger_by_source[source_name] = time.time()
 
 
 def startup_models():
@@ -177,24 +199,27 @@ def run_single_frame_analysis(frame, source_name: Optional[str] = None):
     update_last_frame(display_frame)
     risk_text = None
     if analysis["has_fire"] or analysis["has_smoke"]:
-        rgb_frame = cv2.cvtColor(resize_frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb_frame)
-        prompt = build_vlm_prompt(detections, analysis)
-        risk_text = state.qwen_runner.infer(
-            image_input=pil_image,
-            user_text=prompt,
-            max_new_tokens=64,
-        )
+        if can_run_vlm(source_name):
+            rgb_frame = cv2.cvtColor(resize_frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            prompt = build_vlm_prompt(detections, analysis)
 
-        update_latest_risk(risk_text, source_name, analysis, detections)
-
-        if source_name:
-            send_internal_vlm_if_needed(
-                source_name=source_name,
-                analysis=analysis,
-                detections=detections,
-                risk_text=risk_text,
+            risk_text = state.qwen_runner.infer(
+                image_input=pil_image,
+                user_text=prompt,
+                max_new_tokens=64,
             )
+
+            mark_vlm_trigger(source_name)
+            update_latest_risk(risk_text, source_name, analysis, detections)
+
+            if source_name:
+                send_internal_vlm_if_needed(
+                    source_name=source_name,
+                    analysis=analysis,
+                    detections=detections,
+                    risk_text=risk_text,
+                )
     return {"detections": detections, "analysis": analysis, "risk_text": risk_text, "frame_path": str(LAST_FRAME_PATH)}
 
 
