@@ -31,7 +31,7 @@ class VideoStartRequest(BaseModel):
 
 
 class InternalVLMAnalysisRequest(BaseModel):
-    ip_addr: str
+    ip_address: str
     ev_code_name: str
     risk_text: str
     time: str

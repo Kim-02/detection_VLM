@@ -262,9 +262,9 @@ def now_kst_iso() -> str:
     return datetime.now(kst).isoformat(timespec="seconds")
 
 
-def post_internal_vlm_analysis(ip_addr: str, ev_code_name: str, risk_text: str, event_time: str):
+def post_internal_vlm_analysis(ip_address: str, ev_code_name: str, risk_text: str, event_time: str):
     payload = {
-        "ip_addr": ip_addr,
+        "ip_address": ip_address,
         "ev_code_name": ev_code_name,
         "risk_text": risk_text,
         "time": event_time,
@@ -296,7 +296,7 @@ def send_internal_vlm_if_needed(source_name: str, analysis, detections, risk_tex
 
     try:
         post_internal_vlm_analysis(
-            ip_addr=source_name,
+            ip_address=source_name,
             ev_code_name=ev_code_name,
             risk_text=risk_text,
             event_time=event_time,
@@ -351,11 +351,11 @@ def run_single_frame_analysis(frame, source_name: Optional[str] = None):
     }
 
 
-def build_rtsp_url(ip_address: str, camera_id: str, camera_pw: str, rtsp_port: int = 554, rtsp_path: str = "/stream1") -> str:
+def build_rtsp_url(ip_addressess: str, camera_id: str, camera_pw: str, rtsp_port: int = 554, rtsp_path: str = "/stream1") -> str:
     user = quote(camera_id, safe="")
     password = quote(camera_pw, safe="")
     path = rtsp_path if rtsp_path.startswith("/") else f"/{rtsp_path}"
-    return f"rtsp://{user}:{password}@{ip_address}:{rtsp_port}{path}"
+    return f"rtsp://{user}:{password}@{ip_addressess}:{rtsp_port}{path}"
 
 
 def test_rtsp_connection(rtsp_url: str) -> bool:
