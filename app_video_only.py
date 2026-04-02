@@ -19,6 +19,12 @@ app = FastAPI(title="Safety Monitoring API - Video", description="동영상 파�
 class VideoStartRequest(BaseModel):
     video_name: str
 
+class InternalVLMAnalysisRequest(BaseModel):
+    camera_ip: str
+    ev_code_name: str
+    risk_text: str
+    time: str
+
 
 @app.on_event("startup")
 def startup_event():
@@ -118,3 +124,14 @@ def stop_video_analysis():
             return {"message": "현재 실행 중인 동영상 분석이 없습니다."}
     state.video_stop_event.set()
     return {"message": "동영상 분석 중지 요청을 보냈습니다."}
+
+@app.post("/api/internal/vlm-analysis")
+def receive_internal_vlm_analysis(req: InternalVLMAnalysisRequest):
+    with state.internal_vlm_analysis_lock:
+        state.internal_vlm_analysis = req.dict()
+    return {"status": "ok"}
+
+@app.get("/api/internal/vlm-analysis/latest")
+def get_internal_vlm_analysis_latest():
+    with state.internal_vlm_analysis_lock:
+        return state.internal_vlm_analysis or {}
