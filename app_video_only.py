@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, Request
 from pydantic import BaseModel
 
 from common_monitoring import (
@@ -18,6 +18,9 @@ from common_monitoring import (
     startup_models,
     state,
 )
+
+BASE_DIR = Path(__file__).resolve().parent
+INDEX_HTML_PATH = BASE_DIR / "index.html"
 
 app = FastAPI(
     title="Safety Monitoring API - Video",
@@ -37,10 +40,101 @@ class InternalVLMAnalysisRequest(BaseModel):
     time: str
 
 
+def ensure_index_html():
+    if INDEX_HTML_PATH.exists():
+        return
+
+    INDEX_HTML_PATH.write_text(
+        """<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video YOLO Monitor</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 24px;
+            background: #111;
+            color: #eee;
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        .wrap {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        h1 {
+            margin-bottom: 12px;
+        }
+        .status {
+            margin-bottom: 16px;
+            font-size: 15px;
+            color: #bbb;
+        }
+        img {
+            width: 100%;
+            max-width: 1000px;
+            border: 2px solid #444;
+            background: #000;
+        }
+        .hidden {
+            display: none;
+        }
+        .message {
+            margin-top: 20px;
+            color: #f0c674;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>동영상 YOLO 분석 화면</h1>
+        <div id="statusText" class="status">상태 확인 중...</div>
+        <img id="streamImage" class="hidden" src="/cam/stream" alt="video stream" />
+        <div id="emptyMessage" class="message">현재 분석 중인 동영상이 없습니다.</div>
+    </div>
+
+    <script>
+        async function refreshStatus() {
+            try {
+                const res = await fetch("/status/video", { cache: "no-store" });
+                const data = await res.json();
+
+                const img = document.getElementById("streamImage");
+                const msg = document.getElementById("emptyMessage");
+                const status = document.getElementById("statusText");
+
+                if (data.running) {
+                    status.textContent = `분석 중: ${data.video_name ?? "-"}`;
+                    img.classList.remove("hidden");
+                    msg.classList.add("hidden");
+
+                    // 브라우저 캐시 방지용으로 src 갱신
+                    img.src = "/cam/stream?ts=" + Date.now();
+                } else {
+                    status.textContent = "현재 분석 중인 동영상이 없습니다.";
+                    img.classList.add("hidden");
+                    msg.classList.remove("hidden");
+                }
+            } catch (e) {
+                document.getElementById("statusText").textContent = "상태 조회 실패";
+            }
+        }
+
+        refreshStatus();
+        setInterval(refreshStatus, 3000);
+    </script>
+</body>
+</html>
+""",
+        encoding="utf-8",
+    )
+
 @app.on_event("startup")
 def startup_event():
+    ensure_index_html()
     startup_models()
-
 
 def video_worker(video_path: Path):
     try:
@@ -117,11 +211,6 @@ def get_video_status():
         return state.video_state
 
 
-@app.get("/risk/latest")
-def get_latest_risk():
-    with state.latest_risk_lock:
-        return state.latest_risk
-
 
 @app.get("/frame/latest")
 def get_latest_frame():
@@ -196,24 +285,14 @@ def get_internal_vlm_analysis_latest():
         return state.internal_vlm_analysis or {}
 
 
-@app.get("/cam", response_class=HTMLResponse)
-def camera_page():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Video YOLO Monitor</title>
-        <style>
-            body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
-            img { max-width: 95vw; border: 2px solid #444; margin-top: 20px; }
-        </style>
-    </head>
-    <body>
-        <h1>동영상 YOLO 분석 화면</h1>
-        <img src="/cam/stream" alt="video stream" />
-    </body>
-    </html>
-    """
+@app.get("/", response_class=HTMLResponse)
+def index_page():
+    return FileResponse(str(INDEX_HTML_PATH), media_type="text/html")
+
+
+@app.get("/index", response_class=HTMLResponse)
+def index_page_alias():
+    return FileResponse(str(INDEX_HTML_PATH), media_type="text/html")
 
 
 @app.get("/cam/stream")
