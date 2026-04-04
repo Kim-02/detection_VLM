@@ -320,7 +320,7 @@ def run_single_frame_analysis(frame, source_name: Optional[str] = None):
     update_latest_stream_frame(display_frame)
 
     risk_text = None
-    if analysis["has_fire"] or analysis["has_smoke"]:
+    if analysis["has_fire"]:
         if can_run_vlm(source_name):
             rgb_frame = cv2.cvtColor(resize_frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(rgb_frame)
