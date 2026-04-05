@@ -63,7 +63,7 @@ class SharedState:
         self.latest_stream_frame = None
 
         self.vlm_cooldown_lock = threading.Lock()
-        self.vlm_cooldown_seconds = 30.0
+        self.vlm_cooldown_seconds = 10.0
         self.last_vlm_trigger_by_source = {}
         self.vlm_queue: Queue = Queue(maxsize=1)
         self.vlm_worker_thread: Optional[threading.Thread] = None
