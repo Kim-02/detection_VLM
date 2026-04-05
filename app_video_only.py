@@ -17,6 +17,7 @@ from common_monitoring import (
     run_single_frame_analysis,
     startup_models,
     state,
+    is_vlm_busy,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -208,7 +209,9 @@ def get_model_status():
 @app.get("/status/video")
 def get_video_status():
     with state.video_state_lock:
-        return state.video_state
+        data = dict(state.video_state)
+    data["vlm_busy"] = is_vlm_busy()
+    return data
 
 
 

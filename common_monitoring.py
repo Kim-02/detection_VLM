@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from urllib import request as urllib_request
 from urllib.parse import quote
-
+from queue import Queue, Full, Empty
 import cv2
 from PIL import Image
 from fastapi import HTTPException
@@ -65,10 +65,107 @@ class SharedState:
         self.vlm_cooldown_lock = threading.Lock()
         self.vlm_cooldown_seconds = 30.0
         self.last_vlm_trigger_by_source = {}
-
+        self.vlm_queue: Queue = Queue(maxsize=1)
+        self.vlm_worker_thread: Optional[threading.Thread] = None
+        self.vlm_stop_event = threading.Event()
+        self.vlm_busy_lock = threading.Lock()
+        self.vlm_busy = False
 
 state = SharedState()
 
+
+def _set_vlm_busy(value: bool):
+    with state.vlm_busy_lock:
+        state.vlm_busy = value
+
+
+def is_vlm_busy() -> bool:
+    with state.vlm_busy_lock:
+        return state.vlm_busy
+
+
+def queue_vlm_request(frame, source_name: Optional[str], analysis, detections) -> bool:
+    if frame is None or state.qwen_runner is None:
+        return False
+
+    payload = {
+        "frame": frame.copy(),
+        "source_name": source_name,
+        "analysis": analysis,
+        "detections": detections,
+        "queued_at": time.time(),
+    }
+
+    try:
+        state.vlm_queue.put_nowait(payload)
+        return True
+    except Full:
+        try:
+            state.vlm_queue.get_nowait()
+        except Empty:
+            pass
+
+        try:
+            state.vlm_queue.put_nowait(payload)
+            return True
+        except Full:
+            return False
+
+
+def vlm_worker_loop():
+    while not state.vlm_stop_event.is_set():
+        try:
+            job = state.vlm_queue.get(timeout=0.5)
+        except Empty:
+            continue
+
+        source_name = job.get("source_name")
+        analysis = job.get("analysis")
+        detections = job.get("detections")
+        frame = job.get("frame")
+
+        if frame is None:
+            continue
+
+        _set_vlm_busy(True)
+        try:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            prompt = build_vlm_prompt(detections, analysis)
+
+            t_start = time.time()
+            risk_text = state.qwen_runner.infer(
+                image_input=pil_image,
+                user_text=prompt,
+                max_new_tokens=64,
+            )
+            t_end = time.time()
+            print(f"[VLM] runtime: {t_end - t_start:.4f} sec", flush=True)
+
+            mark_vlm_trigger(source_name)
+            update_latest_risk(risk_text, source_name, analysis, detections)
+
+            if source_name:
+                send_internal_vlm_if_needed(
+                    source_name=source_name,
+                    analysis=analysis,
+                    detections=detections,
+                    risk_text=risk_text,
+                )
+        except Exception as e:
+            print(f"[VLM worker 오류] {e}", flush=True)
+        finally:
+            _set_vlm_busy(False)
+            state.vlm_queue.task_done()
+
+
+def start_vlm_worker():
+    if state.vlm_worker_thread is not None and state.vlm_worker_thread.is_alive():
+        return
+
+    state.vlm_stop_event.clear()
+    state.vlm_worker_thread = threading.Thread(target=vlm_worker_loop, daemon=True)
+    state.vlm_worker_thread.start()
 
 def startup_models():
     try:
@@ -80,6 +177,7 @@ def startup_models():
             plugin_path="~/TensorRT-Edge-LLM/build/libNvInfer_edgellm_plugin.so",
             work_dir="~/edgellm_work/runtime",
         )
+        start_vlm_worker()
         with state.model_lock:
             state.model_status["model"] = "ok"
     except Exception as e:
@@ -313,39 +411,38 @@ def run_single_frame_analysis(frame, source_name: Optional[str] = None):
     display_frame = draw_detections(resize_frame, detections)
     display_frame = draw_status(display_frame, analysis)
 
+    if analysis["has_fire"] and is_vlm_busy():
+        cv2.putText(
+            display_frame,
+            "VLM analyzing...",
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 255),
+            2,
+        )
+
     update_last_frame(display_frame)
     update_latest_stream_frame(display_frame)
 
     risk_text = None
+    queued_vlm = False
     if analysis["has_fire"]:
-        if can_run_vlm(source_name):
-            rgb_frame = cv2.cvtColor(resize_frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb_frame)
-            prompt = build_vlm_prompt(detections, analysis)
-
-            t_start = time.time()
-            risk_text = state.qwen_runner.infer(
-                image_input=pil_image,
-                user_text=prompt,
-                max_new_tokens=64,
+        if can_run_vlm(source_name) and not is_vlm_busy():
+            queued_vlm = queue_vlm_request(
+                frame=resize_frame,
+                source_name=source_name,
+                analysis=analysis,
+                detections=detections,
             )
-            t_end = time.time()
-            print(f"runtime: {t_end - t_start:.4f} sec")
-            mark_vlm_trigger(source_name)
-            update_latest_risk(risk_text, source_name, analysis, detections)
-
-            if source_name:
-                send_internal_vlm_if_needed(
-                    source_name=source_name,
-                    analysis=analysis,
-                    detections=detections,
-                    risk_text=risk_text,
-                )
+            if queued_vlm:
+                mark_vlm_trigger(source_name)
 
     return {
         "detections": detections,
         "analysis": analysis,
         "risk_text": risk_text,
+        "queued_vlm": queued_vlm,
         "frame_path": str(LAST_FRAME_PATH),
     }
 
