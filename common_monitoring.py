@@ -198,11 +198,8 @@ YOLO 탐지 결과:
 위험상황: <짧게 1~2문장>
 
 규칙:
-- 이미지를 가장 우선해서 판단하세요.
-- YOLO 탐지 결과는 보조 정보로만 사용하세요.
-- 위험한 상황이면 무엇이 위험한지 짧고 분명하게 설명하세요.
-- 위험하지 않으면 현재 상황을 짧게 설명하세요.
-- 불꽃이나 연기가 보이면 반드시 언급하세요.
+- 욜로 탐지 결과를 이용해서 지금 화면에 어떤 상황인지 설명.
+- 화면에 보이는 사물과 사람의 행동을 설명.
 - 같은 내용을 반복하지 마세요.
 - 길게 쓰지 마세요.
 """.strip()
@@ -326,12 +323,14 @@ def run_single_frame_analysis(frame, source_name: Optional[str] = None):
             pil_image = Image.fromarray(rgb_frame)
             prompt = build_vlm_prompt(detections, analysis)
 
+            t_start = time.time()
             risk_text = state.qwen_runner.infer(
                 image_input=pil_image,
                 user_text=prompt,
                 max_new_tokens=64,
             )
-
+            t_end = time.time()
+            print(f"runtime: {t_end - t_start:.4f} sec")
             mark_vlm_trigger(source_name)
             update_latest_risk(risk_text, source_name, analysis, detections)
 
